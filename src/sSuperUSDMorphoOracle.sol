@@ -47,16 +47,41 @@ contract sSuperUSDMorphoOracle is IOracle {
     /// @notice The loan token decimals
     uint8 public immutable loanDecimals;
     
-    /// @notice The sSuperUSD oracle address that provides exchange rate
-    address public immutable sSuperUSDOracleAddress;
+    /// @notice The primary sSuperUSD oracle address that provides exchange rate
+    address public sSuperUSDOracleAddress;
+
+    /// @notice The fallback sSuperUSD oracle address used when primary fails
+    address public sSuperUSDFallbackOracleAddress;
+
+    /// @notice The owner of the contract who can update oracle addresses
+    address public owner;
     
+    /***************************************
+    EVENTS
+    ***************************************/
+    
+    event PrimaryOracleUpdated(address indexed oldOracle, address indexed newOracle);
+    event FallbackOracleUpdated(address indexed oldOracle, address indexed newOracle);
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
     /***************************************
     ERRORS
     ***************************************/
     
     error AddressZero();
     error InvalidAnswer();
+    error NotOwner();
+    error BothOraclesFailed();
     
+    /***************************************
+    MODIFIERS
+    ***************************************/
+
+    modifier onlyOwner() {
+        if (msg.sender != owner) revert NotOwner();
+        _;
+    }
+
     /***************************************
     CONSTRUCTOR
     ***************************************/
@@ -64,15 +89,27 @@ contract sSuperUSDMorphoOracle is IOracle {
     /// @notice Constructs the sSuperUSDOracle contract
     /// @param _collateralToken The address of the collateral token
     /// @param _loanToken The address of the loan token
-    /// @param _sSuperUSDOracleAddress The address of the sSuperUSD oracle
-    constructor(address _collateralToken, address _loanToken, address _sSuperUSDOracleAddress) {
-        if (_collateralToken == address(0) || _loanToken == address(0) || _sSuperUSDOracleAddress == address(0)) {
+    /// @param _sSuperUSDOracleAddress The address of the primary sSuperUSD oracle
+    /// @param _sSuperUSDFallbackOracleAddress The address of the fallback sSuperUSD oracle
+    constructor(
+        address _collateralToken, 
+        address _loanToken, 
+        address _sSuperUSDOracleAddress,
+        address _sSuperUSDFallbackOracleAddress
+    ) {
+        if (_collateralToken == address(0) || 
+            _loanToken == address(0) || 
+            _sSuperUSDOracleAddress == address(0) ||
+            _sSuperUSDFallbackOracleAddress == address(0)
+        ) {
             revert AddressZero();
         }
         
         collateralToken = _collateralToken;
         loanToken = _loanToken;
         sSuperUSDOracleAddress = _sSuperUSDOracleAddress;
+        sSuperUSDFallbackOracleAddress = _sSuperUSDFallbackOracleAddress;
+        owner = msg.sender;
         
         // Get decimals from token contracts
         collateralDecimals = IERC20Metadata(_collateralToken).decimals();
@@ -84,27 +121,77 @@ contract sSuperUSDMorphoOracle is IOracle {
     ***************************************/
     
     /// @notice Returns the price of 1 asset of collateral token quoted in 1 asset of loan token, scaled by 1e36
-    /// @dev Gets the exchange rate from sSuperUSD oracle and converts it to Morpho format
+    /// @dev Tries primary oracle first, falls back to secondary oracle if primary fails
     /// @return The price rate of 1 asset of collateral token quoted in 1 asset of loan token (scaled by 1e36)
     function price() external view override returns (uint256) {
-        // Get the exchange rate from sSuperUSD oracle
-        (, int256 answer, , , ) = IsSuperUSDOracle(sSuperUSDOracleAddress).latestRoundData();
-        
-        // Ensure answer is positive
-        if (answer <= 0) revert InvalidAnswer();
-        
-        // Convert answer from int256 to uint256
+        // Try primary oracle first
+        try IsSuperUSDOracle(sSuperUSDOracleAddress).latestRoundData() returns (
+            uint80 /* roundId */, 
+            int256 answer, 
+            uint256 /* startedAt */, 
+            uint256 /* updatedAt */, 
+            uint80 /* answeredInRound */
+        ) {
+            if (answer > 0) {
+                return _calculatePrice(answer);
+            }
+        } catch {}
+
+        // If primary oracle fails or returns invalid price, try fallback oracle
+        try IsSuperUSDOracle(sSuperUSDFallbackOracleAddress).latestRoundData() returns (
+            uint80 /* roundId */, 
+            int256 answer, 
+            uint256 /* startedAt */, 
+            uint256 /* updatedAt */, 
+            uint80 /* answeredInRound */
+        ) {
+            if (answer > 0) {
+                return _calculatePrice(answer);
+            }
+        } catch {}
+
+        // If both oracles fail, revert
+        revert BothOraclesFailed();
+    }
+
+    /// @dev Internal function to calculate price with proper scaling
+    function _calculatePrice(int256 answer) internal view returns (uint256) {
         uint256 exchangeRate = uint256(answer);
-        
-        // Answer has 8 decimals (1e8), we need to convert to our precision
-        // Calculate the target precision: 36 + loanDecimals - collateralDecimals
         uint256 targetPrecision = 36 + loanDecimals - collateralDecimals;
-        
-        // Convert from 8 decimals to target precision
-        // exchangeRate is in 1e8 format, we need it in 10^targetPrecision format
         return exchangeRate * (10 ** (targetPrecision - 8));
     }
-    
+
+    /***************************************
+    ADMIN FUNCTIONS
+    ***************************************/
+
+    /// @notice Updates the primary oracle address
+    /// @param _newOracle The new oracle address
+    function updatePrimaryOracle(address _newOracle) external onlyOwner {
+        if (_newOracle == address(0)) revert AddressZero();
+        address oldOracle = sSuperUSDOracleAddress;
+        sSuperUSDOracleAddress = _newOracle;
+        emit PrimaryOracleUpdated(oldOracle, _newOracle);
+    }
+
+    /// @notice Updates the fallback oracle address
+    /// @param _newOracle The new oracle address
+    function updateFallbackOracle(address _newOracle) external onlyOwner {
+        if (_newOracle == address(0)) revert AddressZero();
+        address oldOracle = sSuperUSDFallbackOracleAddress;
+        sSuperUSDFallbackOracleAddress = _newOracle;
+        emit FallbackOracleUpdated(oldOracle, _newOracle);
+    }
+
+    /// @notice Transfers ownership of the contract
+    /// @param _newOwner The address of the new owner
+    function transferOwnership(address _newOwner) external onlyOwner {
+        if (_newOwner == address(0)) revert AddressZero();
+        address oldOwner = owner;
+        owner = _newOwner;
+        emit OwnershipTransferred(oldOwner, _newOwner);
+    }
+
     /***************************************
     VIEW FUNCTIONS
     ***************************************/
