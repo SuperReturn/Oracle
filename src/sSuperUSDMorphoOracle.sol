@@ -56,6 +56,7 @@ interface IAccountant {
 /// @dev This oracle gets the exchange rate from an external sSuperUSD oracle and converts it to Morpho format
 contract sSuperUSDMorphoOracle is IOracle, ReentrancyGuard {
     using FixedPointMathLib for uint256;
+
     /***************************************
     STATE VARIABLES
     ***************************************/
@@ -93,6 +94,18 @@ contract sSuperUSDMorphoOracle is IOracle, ReentrancyGuard {
     /// @notice Last valid answer
     int256 private _latestAnswer;  // Changed from uint256 to int256
 
+    /// @notice Size of the moving average window
+    uint256 public constant WINDOW_SIZE = 24; 
+
+    /// @notice Array to store historical prices
+    int256[WINDOW_SIZE] private priceHistory;
+    
+    /// @notice Current index in the circular buffer
+    uint256 private currentIndex;
+    
+    /// @notice Number of prices recorded
+    uint256 private numPrices;
+
 
     /***************************************
     EVENTS
@@ -104,6 +117,7 @@ contract sSuperUSDMorphoOracle is IOracle, ReentrancyGuard {
     event MaxPriceAgeUpdated(uint256 oldMaxAge, uint256 newMaxAge);
     event BoundsUpdated(uint16 newUpper, uint16 newLower);
     event PriceUpdated(uint256 oldPrice, uint256 newPrice);
+    event MovingAverageUpdated(uint256 oldMA, uint256 newMA);
 
     /***************************************
     ERRORS
@@ -112,6 +126,7 @@ contract sSuperUSDMorphoOracle is IOracle, ReentrancyGuard {
     error AddressZero();
     error NotOwner();
     error InvalidBounds();
+    error InsufficientPriceHistory();
     
     /***************************************
     MODIFIERS
@@ -166,7 +181,7 @@ contract sSuperUSDMorphoOracle is IOracle, ReentrancyGuard {
         bool isPrimaryFresh = false;
         bool isPriceOutOfRange = false;
         int256 answer;
-        int256 oldPrice = _latestAnswer;  // Changed from uint256 to int256
+        int256 oldMA = calculateMovingAverage();
 
         // Fresh check
         address primaryAccountant = IsSuperUSDOracle(sSuperUSDOracleAddress).sSuperUSDAccountant();
@@ -177,11 +192,13 @@ contract sSuperUSDMorphoOracle is IOracle, ReentrancyGuard {
         }
 
         // Bound check
-        if(_latestAnswer != 0) {
-            (/* roundId */, answer, /* startedAt */, /* updatedAt */, /* answeredInRound */) = IsSuperUSDOracle(sSuperUSDOracleAddress).latestRoundData();
-            if (uint256(answer) > uint256(_latestAnswer).mulDivDown(allowedExchangeRateChangeUpper, 1e4) ||
-                uint256(answer) < uint256(_latestAnswer).mulDivDown(allowedExchangeRateChangeLower, 1e4)) {
-                isPriceOutOfRange = true;
+        if (isPrimaryFresh) {
+            if(oldMA != 0) {
+                (/* roundId */, answer, /* startedAt */, /* updatedAt */, /* answeredInRound */) = IsSuperUSDOracle(sSuperUSDOracleAddress).latestRoundData();
+                if (uint256(answer) > uint256(oldMA).mulDivDown(allowedExchangeRateChangeUpper, 1e4) ||
+                    uint256(answer) < uint256(oldMA).mulDivDown(allowedExchangeRateChangeLower, 1e4)) {
+                    isPriceOutOfRange = true;
+                }
             }
         }
 
@@ -191,17 +208,43 @@ contract sSuperUSDMorphoOracle is IOracle, ReentrancyGuard {
                 IsSuperUSDOracle(sSuperUSDFallbackOracleAddress).latestRoundData();
         }
 
-        _latestAnswer = answer;
-        emit PriceUpdated(uint256(oldPrice), uint256(answer));  // Cast to uint256 for the event
+        // Update price history
+        priceHistory[currentIndex] = answer;
+        currentIndex = (currentIndex + 1) % WINDOW_SIZE;
+        if (numPrices < WINDOW_SIZE) {
+            numPrices++;
+        }
+
+        // Calculate and store new moving average
+        int256 newMA = calculateMovingAverage();
+        _latestAnswer = newMA;
+        
+        emit PriceUpdated(uint256(oldMA), uint256(newMA));
+        emit MovingAverageUpdated(uint256(oldMA), uint256(newMA));
+    }
+
+    /// @notice Calculates the moving average of stored prices
+    /// @return The moving average price
+    function calculateMovingAverage() public view returns (int256) {
+        if (numPrices == 0) return 0;
+        
+        int256 sum = 0;
+        uint256 count = numPrices;
+        
+        for (uint256 i = 0; i < count; i++) {
+            sum += priceHistory[i];
+        }
+        
+        return sum / int256(count);
     }
 
     /// @notice Returns the latest valid exchange rate without updating it
     /// @dev Calculates the price by scaling the stored answer to the correct precision
     /// @return The exchange rate of 1 unit of collateral token in terms of 1 unit of loan token (scaled by 1e36)
     function price() external view override returns (uint256) {
-        uint256 exchangeRate = uint256(_latestAnswer);
+        uint256 maPrice = uint256(calculateMovingAverage());
         uint256 targetPrecision = 36 + loanDecimals - collateralDecimals;
-        return exchangeRate * (10 ** (targetPrecision - 8));
+        return maPrice * (10 ** (targetPrecision - 8));
     }
 
     /***************************************
