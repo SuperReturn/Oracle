@@ -219,8 +219,14 @@ contract sSuperUSDMorphoOracle is IOracle, ReentrancyGuard {
         int256 newMA = calculateMovingAverage();
         _latestAnswer = newMA;
         
+        // update bound based on newMA
+        allowedExchangeRateChangeUpper = uint16(newMA.mulDivDown(allowedExchangeRateChangeUpper, 1e4));
+        allowedExchangeRateChangeLower = uint16(newMA.mulDivDown(allowedExchangeRateChangeLower, 1e4));
+        
+        // emit events
         emit PriceUpdated(uint256(oldMA), uint256(newMA));
         emit MovingAverageUpdated(uint256(oldMA), uint256(newMA));
+        emit BoundsUpdated(allowedExchangeRateChangeUpper, allowedExchangeRateChangeLower);
     }
 
     /// @notice Calculates the moving average of stored prices
@@ -276,21 +282,6 @@ contract sSuperUSDMorphoOracle is IOracle, ReentrancyGuard {
         uint256 oldMaxAge = maxPriceAge;
         maxPriceAge = _newMaxAge;
         emit MaxPriceAgeUpdated(oldMaxAge, _newMaxAge);
-    }
-
-    /// @notice Updates the allowed exchange rate change bounds
-    /// @param _newUpper The new upper bound multiplier (scaled by 1e4)
-    /// @param _newLower The new lower bound multiplier (scaled by 1e4)
-    function updateBounds(uint16 _newUpper, uint16 _newLower) external onlyOwner {
-        // Upper bound must be > 1e4 (100%) and lower bound must be < 1e4 (100%)
-        if (_newUpper <= 1e4 || _newLower >= 1e4 || _newLower == 0) {
-            revert InvalidBounds();
-        }
-        
-        allowedExchangeRateChangeUpper = _newUpper;
-        allowedExchangeRateChangeLower = _newLower;
-        
-        emit BoundsUpdated(_newUpper, _newLower);
     }
 
     /// @notice Transfers ownership of the contract
