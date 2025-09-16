@@ -82,6 +82,16 @@ contract sSuperUSDMorphoOracle is IOracle {
     /// @notice The owner of the contract who can update oracle addresses
     address public owner;
     
+    /// @notice The upper bound multiplier for price changes (scaled by 1e4)
+    uint16 public allowedExchangeRateChangeUpper = 10050; // 100.5% default
+
+    /// @notice The lower bound multiplier for price changes (scaled by 1e4)
+    uint16 public allowedExchangeRateChangeLower = 9500;  // 95% default
+
+    /// @notice Last valid answer
+    uint256 private _latestAnswer;
+
+
     /***************************************
     EVENTS
     ***************************************/
@@ -90,6 +100,7 @@ contract sSuperUSDMorphoOracle is IOracle {
     event FallbackOracleUpdated(address indexed oldOracle, address indexed newOracle);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event MaxPriceAgeUpdated(uint256 oldMaxAge, uint256 newMaxAge);
+    event BoundsUpdated(uint16 newUpper, uint16 newLower);
 
     /***************************************
     ERRORS
@@ -97,6 +108,7 @@ contract sSuperUSDMorphoOracle is IOracle {
     
     error AddressZero();
     error NotOwner();
+    error InvalidBounds();
     
     /***************************************
     MODIFIERS
@@ -145,32 +157,48 @@ contract sSuperUSDMorphoOracle is IOracle {
     ORACLE FUNCTIONS
     ***************************************/
     
-    /// @notice Computes the exchange rate of the collateral token in terms of the loan token, scaled by 1e36
+    /// @notice Computes and updates the exchange rate of the collateral token in terms of the loan token, scaled by 1e36
     /// @dev Attempts to retrieve the rate from the primary oracle first; if unsuccessful, it uses the fallback oracle
-    /// @return The exchange rate of 1 unit of collateral token in terms of 1 unit of loan token (scaled by 1e36)
-    function price() external view override returns (uint256) {
-        // Try primary oracle first
+    function updatePrice() public {
+        bool isPrimaryFresh = false;
+        bool isPriceOutOfRange = false;
+        int256 answer;
+
+        // Fresh check
         address primaryAccountant = IsSuperUSDOracle(sSuperUSDOracleAddress).sSuperUSDAccountant();
         IAccountant.AccountantState memory state = IAccountant(primaryAccountant).accountantState();
-        
-        int256 answer;
-        
-        // If primary price is stale, use fallback oracle
-        if (block.timestamp - state.lastUpdateTimestamp > maxPriceAge) {
+
+        if (block.timestamp - state.lastUpdateTimestamp <= maxPriceAge) {
+            isPrimaryFresh = true;
+        }
+
+        // Skip bound check for first price
+        if (_latestAnswer == 0) {
+            _latestAnswer = answer;
+            return;
+        }
+
+        // Bound check
+        (/* roundId */, answer, /* startedAt */, /* updatedAt */, /* answeredInRound */) = IsSuperUSDOracle(sSuperUSDOracleAddress).latestRoundData();
+        if (answer > _latestAnswer * allowedExchangeRateChangeUpper / 1e4 ||
+            answer < _latestAnswer * allowedExchangeRateChangeLower / 1e4) {
+            isPriceOutOfRange = true;
+        }
+
+        // Use fallback oracle if primary price is invalid
+        if (!isPrimaryFresh || isPriceOutOfRange) {
             (/* roundId */, answer, /* startedAt */, /* updatedAt */, /* answeredInRound */) = 
                 IsSuperUSDOracle(sSuperUSDFallbackOracleAddress).latestRoundData();
-        } else {
-            // Use primary oracle if price is fresh
-            (/* roundId */, answer, /* startedAt */, /* updatedAt */, /* answeredInRound */) = 
-                IsSuperUSDOracle(sSuperUSDOracleAddress).latestRoundData();
         }
-        
-        return _calculatePrice(answer);
+
+        _latestAnswer = answer;
     }
 
-    /// @dev Internal function to calculate price with proper scaling
-    function _calculatePrice(int256 answer) internal view returns (uint256) {
-        uint256 exchangeRate = uint256(answer);
+    /// @notice Returns the latest valid exchange rate without updating it
+    /// @dev Calculates the price by scaling the stored answer to the correct precision
+    /// @return The exchange rate of 1 unit of collateral token in terms of 1 unit of loan token (scaled by 1e36)
+    function price() external view override returns (uint256) {
+        uint256 exchangeRate = uint256(_latestAnswer);
         uint256 targetPrecision = 36 + loanDecimals - collateralDecimals;
         return exchangeRate * (10 ** (targetPrecision - 8));
     }
@@ -204,6 +232,21 @@ contract sSuperUSDMorphoOracle is IOracle {
         uint256 oldMaxAge = maxPriceAge;
         maxPriceAge = _newMaxAge;
         emit MaxPriceAgeUpdated(oldMaxAge, _newMaxAge);
+    }
+
+    /// @notice Updates the allowed exchange rate change bounds
+    /// @param _newUpper The new upper bound multiplier (scaled by 1e4)
+    /// @param _newLower The new lower bound multiplier (scaled by 1e4)
+    function updateBounds(uint16 _newUpper, uint16 _newLower) external onlyOwner {
+        // Upper bound must be > 1e4 (100%) and lower bound must be < 1e4 (100%)
+        if (_newUpper <= 1e4 || _newLower >= 1e4 || _newLower == 0) {
+            revert InvalidBounds();
+        }
+        
+        allowedExchangeRateChangeUpper = _newUpper;
+        allowedExchangeRateChangeLower = _newLower;
+        
+        emit BoundsUpdated(_newUpper, _newLower);
     }
 
     /// @notice Transfers ownership of the contract
