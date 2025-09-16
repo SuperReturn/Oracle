@@ -23,6 +23,29 @@ interface IsSuperUSDOracle {
         external
         view
         returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound);
+    
+    // Add accountant getter
+    function sSuperUSDAccountant() external view returns (address);
+}
+
+// Add interface for accountant state
+interface IAccountant {
+    struct AccountantState {
+        address payoutAddress;
+        uint96 highwaterMark;
+        uint128 feesOwedInBase;
+        uint128 totalSharesLastUpdate;
+        uint96 exchangeRate;
+        uint16 allowedExchangeRateChangeUpper;
+        uint16 allowedExchangeRateChangeLower;
+        uint64 lastUpdateTimestamp;
+        bool isPaused;
+        uint24 minimumUpdateDelayInSeconds;
+        uint16 platformFee;
+        uint16 performanceFee;
+    }
+
+    function accountantState() external view returns (AccountantState memory);
 }
 
 /// @title sSuperUSDOracle
@@ -35,6 +58,9 @@ contract sSuperUSDMorphoOracle is IOracle {
     STATE VARIABLES
     ***************************************/
     
+    /// @notice Maximum age of price feed in seconds before considering it stale
+    uint256 public maxPriceAge = 24 hours;
+
     /// @notice The collateral token address
     address public immutable collateralToken;
     
@@ -63,15 +89,14 @@ contract sSuperUSDMorphoOracle is IOracle {
     event PrimaryOracleUpdated(address indexed oldOracle, address indexed newOracle);
     event FallbackOracleUpdated(address indexed oldOracle, address indexed newOracle);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    event MaxPriceAgeUpdated(uint256 oldMaxAge, uint256 newMaxAge);
 
     /***************************************
     ERRORS
     ***************************************/
     
     error AddressZero();
-    error InvalidAnswer();
     error NotOwner();
-    error BothOraclesFailed();
     
     /***************************************
     MODIFIERS
@@ -120,38 +145,27 @@ contract sSuperUSDMorphoOracle is IOracle {
     ORACLE FUNCTIONS
     ***************************************/
     
-    /// @notice Returns the price of 1 asset of collateral token quoted in 1 asset of loan token, scaled by 1e36
-    /// @dev Tries primary oracle first, falls back to secondary oracle if primary fails
-    /// @return The price rate of 1 asset of collateral token quoted in 1 asset of loan token (scaled by 1e36)
+    /// @notice Computes the exchange rate of the collateral token in terms of the loan token, scaled by 1e36
+    /// @dev Attempts to retrieve the rate from the primary oracle first; if unsuccessful, it uses the fallback oracle
+    /// @return The exchange rate of 1 unit of collateral token in terms of 1 unit of loan token (scaled by 1e36)
     function price() external view override returns (uint256) {
         // Try primary oracle first
-        try IsSuperUSDOracle(sSuperUSDOracleAddress).latestRoundData() returns (
-            uint80 /* roundId */, 
-            int256 answer, 
-            uint256 /* startedAt */, 
-            uint256 /* updatedAt */, 
-            uint80 /* answeredInRound */
-        ) {
-            if (answer > 0) {
-                return _calculatePrice(answer);
-            }
-        } catch {}
-
-        // If primary oracle fails or returns invalid price, try fallback oracle
-        try IsSuperUSDOracle(sSuperUSDFallbackOracleAddress).latestRoundData() returns (
-            uint80 /* roundId */, 
-            int256 answer, 
-            uint256 /* startedAt */, 
-            uint256 /* updatedAt */, 
-            uint80 /* answeredInRound */
-        ) {
-            if (answer > 0) {
-                return _calculatePrice(answer);
-            }
-        } catch {}
-
-        // If both oracles fail, revert
-        revert BothOraclesFailed();
+        address primaryAccountant = IsSuperUSDOracle(sSuperUSDOracleAddress).sSuperUSDAccountant();
+        IAccountant.AccountantState memory state = IAccountant(primaryAccountant).accountantState();
+        
+        int256 answer;
+        
+        // If primary price is stale, use fallback oracle
+        if (block.timestamp - state.lastUpdateTimestamp > maxPriceAge) {
+            (/* roundId */, answer, /* startedAt */, /* updatedAt */, /* answeredInRound */) = 
+                IsSuperUSDOracle(sSuperUSDFallbackOracleAddress).latestRoundData();
+        } else {
+            // Use primary oracle if price is fresh
+            (/* roundId */, answer, /* startedAt */, /* updatedAt */, /* answeredInRound */) = 
+                IsSuperUSDOracle(sSuperUSDOracleAddress).latestRoundData();
+        }
+        
+        return _calculatePrice(answer);
     }
 
     /// @dev Internal function to calculate price with proper scaling
@@ -181,6 +195,15 @@ contract sSuperUSDMorphoOracle is IOracle {
         address oldOracle = sSuperUSDFallbackOracleAddress;
         sSuperUSDFallbackOracleAddress = _newOracle;
         emit FallbackOracleUpdated(oldOracle, _newOracle);
+    }
+
+    /// @notice Updates the maximum allowed age for price feeds
+    /// @param _newMaxAge The new maximum age in seconds
+    function updateMaxPriceAge(uint256 _newMaxAge) external onlyOwner {
+        if (_newMaxAge == 0) revert AddressZero();
+        uint256 oldMaxAge = maxPriceAge;
+        maxPriceAge = _newMaxAge;
+        emit MaxPriceAgeUpdated(oldMaxAge, _newMaxAge);
     }
 
     /// @notice Transfers ownership of the contract
