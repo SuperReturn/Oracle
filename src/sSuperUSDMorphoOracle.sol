@@ -2,6 +2,8 @@
 pragma solidity ^0.8.21;
 
 import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import { FixedPointMathLib } from "@solmate/utils/FixedPointMathLib.sol";
 
 /// @title IOracle
 /// @author Morpho Labs
@@ -52,8 +54,8 @@ interface IAccountant {
 /// @author SuperReturn
 /// @notice Oracle contract for sSuperUSD that implements IOracle interface
 /// @dev This oracle gets the exchange rate from an external sSuperUSD oracle and converts it to Morpho format
-contract sSuperUSDMorphoOracle is IOracle {
-    
+contract sSuperUSDMorphoOracle is IOracle, ReentrancyGuard {
+    using FixedPointMathLib for uint256;
     /***************************************
     STATE VARIABLES
     ***************************************/
@@ -89,7 +91,7 @@ contract sSuperUSDMorphoOracle is IOracle {
     uint16 public allowedExchangeRateChangeLower = 9500;  // 95% default
 
     /// @notice Last valid answer
-    uint256 private _latestAnswer;
+    int256 private _latestAnswer;  // Changed from uint256 to int256
 
 
     /***************************************
@@ -101,6 +103,7 @@ contract sSuperUSDMorphoOracle is IOracle {
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event MaxPriceAgeUpdated(uint256 oldMaxAge, uint256 newMaxAge);
     event BoundsUpdated(uint16 newUpper, uint16 newLower);
+    event PriceUpdated(uint256 oldPrice, uint256 newPrice);
 
     /***************************************
     ERRORS
@@ -163,6 +166,7 @@ contract sSuperUSDMorphoOracle is IOracle {
         bool isPrimaryFresh = false;
         bool isPriceOutOfRange = false;
         int256 answer;
+        int256 oldPrice = _latestAnswer;  // Changed from uint256 to int256
 
         // Fresh check
         address primaryAccountant = IsSuperUSDOracle(sSuperUSDOracleAddress).sSuperUSDAccountant();
@@ -172,17 +176,13 @@ contract sSuperUSDMorphoOracle is IOracle {
             isPrimaryFresh = true;
         }
 
-        // Skip bound check for first price
-        if (_latestAnswer == 0) {
-            _latestAnswer = answer;
-            return;
-        }
-
         // Bound check
-        (/* roundId */, answer, /* startedAt */, /* updatedAt */, /* answeredInRound */) = IsSuperUSDOracle(sSuperUSDOracleAddress).latestRoundData();
-        if (answer > _latestAnswer * allowedExchangeRateChangeUpper / 1e4 ||
-            answer < _latestAnswer * allowedExchangeRateChangeLower / 1e4) {
-            isPriceOutOfRange = true;
+        if(_latestAnswer != 0) {
+            (/* roundId */, answer, /* startedAt */, /* updatedAt */, /* answeredInRound */) = IsSuperUSDOracle(sSuperUSDOracleAddress).latestRoundData();
+            if (uint256(answer) > uint256(_latestAnswer).mulDivDown(allowedExchangeRateChangeUpper, 1e4) ||
+                uint256(answer) < uint256(_latestAnswer).mulDivDown(allowedExchangeRateChangeLower, 1e4)) {
+                isPriceOutOfRange = true;
+            }
         }
 
         // Use fallback oracle if primary price is invalid
@@ -192,6 +192,7 @@ contract sSuperUSDMorphoOracle is IOracle {
         }
 
         _latestAnswer = answer;
+        emit PriceUpdated(uint256(oldPrice), uint256(answer));  // Cast to uint256 for the event
     }
 
     /// @notice Returns the latest valid exchange rate without updating it
