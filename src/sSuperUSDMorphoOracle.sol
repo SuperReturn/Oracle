@@ -67,9 +67,10 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event MaxPriceAgeUpdated(uint256 oldMaxAge, uint256 newMaxAge);
     event BoundsUpdated(uint256 newUpper, uint256 newLower);
-    event PriceUpdated(uint256 oldPrice, uint256 newPrice);
     event MovingAverageUpdated(uint256 oldMA, uint256 newMA);
     event MultiplierUpdated(uint256 oldMultiplier, uint256 newMultiplier);
+    event PrimaryPriceUsed(uint256 price);
+    event FallbackPriceUsed(uint256 price, string reason);
 
     /***************************************
     ERRORS
@@ -156,12 +157,19 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
                 uint256(newPrice) < uint256(oldEMA).mulDivDown(allowedExchangeRateChangeLower, 1e4)) {
                 isPriceOutOfRange = true;
             }
+
+            if (!isPriceOutOfRange) {
+                emit PrimaryPriceUsed(uint256(newPrice));
+            }
         }
 
         // Use fallback oracle if primary price is invalid
         if (!isPrimaryFresh || isPriceOutOfRange) {
             (/* roundId */, newPrice, /* startedAt */, /* updatedAt */, /* answeredInRound */) = 
                 IsSuperUSDOracle(sSuperUSDFallbackOracleAddress).latestRoundData();
+            
+            string memory reason = !isPrimaryFresh ? "stale_price" : "price_out_of_bounds";
+            emit FallbackPriceUsed(uint256(newPrice), reason);
         }
 
         // Calculate new EMA
@@ -172,11 +180,10 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
         currentEMA = (newPrice * int256(multiplierValue) + oldEMA * int256(10000 - multiplierValue)) / int256(10000);
         
         // Update bounds based on new EMA
-        allowedExchangeRateChangeUpper = uint256(currentEMA).mulDivDown(10050, 1e4); // 100.5%
-        allowedExchangeRateChangeLower = uint256(currentEMA).mulDivDown(9500, 1e4);  // 95%
+        allowedExchangeRateChangeUpper = uint256(10050).mulDivDown(uint256(currentEMA), 1e8);
+        allowedExchangeRateChangeLower = uint256(9500).mulDivDown(uint256(currentEMA), 1e8);
         
         // Emit events
-        emit PriceUpdated(uint256(oldEMA), uint256(currentEMA));
         emit MovingAverageUpdated(uint256(oldEMA), uint256(currentEMA));
         emit BoundsUpdated(allowedExchangeRateChangeUpper, allowedExchangeRateChangeLower);
     }
@@ -204,6 +211,12 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
     /// @param _newOracle The new oracle address
     function updatePrimaryOracle(address _newOracle) external onlyOwner {
         if (_newOracle == address(0)) revert AddressZero();
+        
+        // Get latest price from new oracle to validate it's not zero
+        (/* roundId */, int256 newPrice, /* startedAt */, /* updatedAt */, /* answeredInRound */) = 
+            IsSuperUSDOracle(_newOracle).latestRoundData();
+        if (newPrice == 0) revert("Zero price not allowed");
+        
         address oldOracle = sSuperUSDOracleAddress;
         sSuperUSDOracleAddress = _newOracle;
         emit PrimaryOracleUpdated(oldOracle, _newOracle);
