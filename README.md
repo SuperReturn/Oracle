@@ -1,66 +1,121 @@
-## Foundry
+# sSuperUSD Oracle System
 
-**Foundry is a blazing fast, portable and modular toolkit for Ethereum application development written in Rust.**
+A robust oracle system for sSuperUSD price feeds with fallback mechanisms and EMA calculations.
 
-Foundry consists of:
+## Overview
 
-- **Forge**: Ethereum testing framework (like Truffle, Hardhat and DappTools).
-- **Cast**: Swiss army knife for interacting with EVM smart contracts, sending transactions and getting chain data.
-- **Anvil**: Local Ethereum node, akin to Ganache, Hardhat Network.
-- **Chisel**: Fast, utilitarian, and verbose solidity REPL.
+The sSuperUSD Oracle System consists of three main components:
+- `sSuperUSDOracle`: Primary oracle that reads price data directly from the Accountant contract
+- `sSuperUSDFallbackOracle`: Backup oracle system
+- `sSuperUSDMorphoOracle`: Advanced oracle implementation with EMA calculations and fallback mechanism
 
-## Documentation
+## Contract Details
 
-https://book.getfoundry.sh/
+### sSuperUSDOracle
 
-## Usage
+The primary oracle contract that provides price data for sSuperUSD.
 
-### Build
+**Key Features:**
+- Direct integration with Accountant contract
+- Price conversion from 6 decimals to 8 decimals
+- Immutable Accountant address
+- Owner-controlled contract with ownership transfer capability
+- Real-time price updates from Accountant
 
-```shell
-$ forge build
-```
+### sSuperUSDMorphoOracle
 
-### Test
+An advanced oracle implementation with additional safety features.
 
-```shell
-$ forge test
-```
+**Key Features:**
+- EMA (Exponential Moving Average) price calculations
+- Dynamic price bounds for security
+- Fallback mechanism for stale or out-of-range prices
+- Timelock contract ownership for enhanced security
+- Mutable oracle addresses for upgradability
 
-### Format
+**Price Bound Parameters:**
+- Initial Lower Bound: 0.95
+- Initial Upper Bound: 1.005
+- Bounds are dynamically updated with each price update:
+  - New Upper Bound = EMA Price × 1.005
+  - New Lower Bound = EMA Price × 0.95
 
-```shell
-$ forge fmt
-```
+## Development
 
-### Gas Snapshots
+### Prerequisites
 
-```shell
-$ forge snapshot
-```
+- [Foundry](https://book.getfoundry.sh/getting-started/installation.html)
+- Solidity ^0.8.21
 
-### Anvil
-
-```shell
-$ anvil
-```
-
-### Deploy
-
-```shell
-$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
-```
-
-### Cast
+### Build and Test
 
 ```shell
-$ cast <subcommand>
+# Build contracts
+forge build
+
+# Run tests
+forge test
+
+# Format code
+forge fmt
+
+# Generate gas snapshots
+forge snapshot
 ```
 
-### Help
+### Local Development
+
+Start a local Ethereum node:
+```shell
+anvil
+```
+
+### Deployment
+
+#### Deploy sSuperUSDOracle
 
 ```shell
-$ forge --help
-$ anvil --help
-$ cast --help
+forge script script/DeploysSuperUSDOracle.s.sol:DeploySSuperUSDOracle \
+  --rpc-url <your_rpc_url> \
+  --private-key <your_private_key>
 ```
+
+#### Deploy sSuperUSDMorphoOracle
+
+```shell
+forge script script/DeploysSuperUSDMorphoOracle.s.sol:DeploySSuperUSDOracle \
+  --rpc-url <your_rpc_url> \
+  --private-key <your_private_key>
+```
+
+**Important:** Set your `PRIVATE_KEY` environment variable before running deployment scripts.
+
+### Utilities
+
+```shell
+# Use Cast for contract interactions
+cast <subcommand>
+
+# Access help documentation
+forge --help
+anvil --help
+cast --help
+```
+
+## Security Considerations
+
+1. **Price Staleness Protection**
+   - sSuperUSDMorphoOracle implements staleness checks
+   - Fallback mechanism activates when primary oracle data is stale
+
+2. **Price Bounds**
+   - Dynamic price bounds prevent extreme price movements
+   - Automatic fallback to secondary oracle when price is out of bounds
+
+3. **Access Control**
+   - sSuperUSDMorphoOracle is controlled by a timelock contract
+   - Owner functions are protected with access control modifiers
+
+## License
+
+MIT License
