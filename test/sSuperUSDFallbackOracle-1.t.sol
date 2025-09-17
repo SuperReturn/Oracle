@@ -12,8 +12,6 @@ contract sSuperUSDFallbackOracleTest is Test {
     sSuperUSDFallbackOracle public oracle10;
     address public owner;
     address public uniV3Pool = 0x61006E81DAebd52Bb757b07a26Cb1d459076D5D6;
-    bool public zeroForOne = true;
-    //bool public zeroForOne = false;
 
     // Fork configuration
     uint256 public forkBlock = 12471000;
@@ -34,9 +32,9 @@ contract sSuperUSDFallbackOracleTest is Test {
         // Set up test addresses
         owner = address(this);
         
-        // Deploy oracle
-        oracle01 = new sSuperUSDFallbackOracle(uniV3Pool, zeroForOne, 6, 6, 60);
-        // Deploy oracle in other direction
+        // Deploy oracle - 1 sSuperUSD = x USDC
+        oracle01 = new sSuperUSDFallbackOracle(uniV3Pool, true, 6, 6, 60);
+        // Deploy oracle in other direction - x sSuperUSD = 1 USDC
         oracle10 = new sSuperUSDFallbackOracle(uniV3Pool, false, 6, 6, 60);
         
         // Verify initial state
@@ -48,7 +46,7 @@ contract sSuperUSDFallbackOracleTest is Test {
     function test_Constructor() public view{
         assertEq(oracle01.owner(), address(this));
         assertEq(oracle01.uniV3Pool(), uniV3Pool);
-        assertEq(oracle01.zeroForOne(), zeroForOne);
+        assertEq(oracle01.zeroForOne(), true);
         assertEq(oracle01.decimals0(), 6);
         assertEq(oracle01.decimals1(), 6);
         assertEq(oracle01.twapInterval(), 60);
