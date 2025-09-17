@@ -12,17 +12,13 @@ contract DeploySSuperUSDOracle is Script {
 
         // Deploy sSuperUSDOracle contract
         // Arbitrum Mainnet Addresses
-        address collateralToken = 0x139450C2dCeF827C9A2a0Bb1CB5506260940c9fd;  // sSuperUSD
-        address loanToken = 0xaf88d065e77c8cC2239327C5EDb3A432268e5831;        // USDC
-        address oracleAddress = 0xdF206c6Ebb600365A47889DF1A0C691a83fa58b0;    // sSuperUSD Oracle
-        address fallbackOracleAddress = 0xdF206c6Ebb600365A47889DF1A0C691a83fa58b0;    // sSuperUSD Oracle
+        address collateralToken = 0x139450C2dCeF827C9A2a0Bb1CB5506260940c9fd; // sSuperUSD
+        address loanToken = 0xaf88d065e77c8cC2239327C5EDb3A432268e5831; // USDC
+        address oracleAddress = 0xdF206c6Ebb600365A47889DF1A0C691a83fa58b0; // sSuperUSD Oracle
+        address fallbackOracleAddress = 0xdF206c6Ebb600365A47889DF1A0C691a83fa58b0; // sSuperUSD Oracle
 
-        sSuperUSDMorphoOracle oracle = new sSuperUSDMorphoOracle(
-            collateralToken,
-            loanToken,
-            oracleAddress,
-            fallbackOracleAddress
-        );
+        sSuperUSDMorphoOracle oracle =
+            new sSuperUSDMorphoOracle(collateralToken, loanToken, oracleAddress, fallbackOracleAddress);
 
         // Stop recording transactions
         vm.stopBroadcast();

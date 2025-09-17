@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.21;
 
-
-// Add interface for accountant state
 interface IAccountant {
+    function getRate() external view returns (uint256);
+
     struct AccountantState {
         address payoutAddress;
         uint96 highwaterMark;
@@ -20,6 +20,4 @@ interface IAccountant {
     }
 
     function accountantState() external view returns (AccountantState memory);
-
-    function getRate() external view returns (uint256);
 }

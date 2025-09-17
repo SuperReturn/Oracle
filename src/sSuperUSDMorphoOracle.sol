@@ -1,40 +1,41 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.21;
 
-import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
-import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import { FixedPointMathLib } from "@solmate/utils/FixedPointMathLib.sol";
-import { IOracle } from "./interfaces/IOracle.sol";
-import { IsSuperUSDOracle } from "./interfaces/IsSuperUSDOracle.sol";
-import { IAccountant } from "./interfaces/IAccountant.sol";
-
+import {IMorphoOracle} from "./interfaces/IMorphoOracle.sol";
+import {IsSuperUSDOracle} from "./interfaces/IsSuperUSDOracle.sol";
+import {IAccountant} from "./interfaces/IAccountant.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {FixedPointMathLib} from "@solmate/utils/FixedPointMathLib.sol";
 
 /// @title sSuperUSDOracle
 /// @author SuperReturn
 /// @notice Oracle contract for sSuperUSD that implements IOracle interface
 /// @dev This oracle gets the exchange rate from an external sSuperUSD oracle and converts it to Morpho format
-contract sSuperUSDMorphoOracle is IOracle, ReentrancyGuard {
+contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
     using FixedPointMathLib for uint256;
 
-    /***************************************
-    STATE VARIABLES
-    ***************************************/
-    
+    /**
+     *
+     * STATE VARIABLES
+     *
+     */
+
     /// @notice Maximum age of price feed in seconds before considering it stale
     uint256 public maxPriceAge = 24 hours;
 
     /// @notice The collateral token address
     address public immutable collateralToken;
-    
-    /// @notice The loan token address  
+
+    /// @notice The loan token address
     address public immutable loanToken;
-    
+
     /// @notice The collateral token decimals
     uint8 public immutable collateralDecimals;
-    
+
     /// @notice The loan token decimals
     uint8 public immutable loanDecimals;
-    
+
     /// @notice The primary sSuperUSD oracle address that provides exchange rate
     address public sSuperUSDOracleAddress;
 
@@ -43,164 +44,174 @@ contract sSuperUSDMorphoOracle is IOracle, ReentrancyGuard {
 
     /// @notice The owner of the contract who can update oracle addresses
     address public owner;
-    
+
     /// @notice The upper bound multiplier for price changes (scaled by 1e4)
-    uint16 public allowedExchangeRateChangeUpper = 10050; // 100.5% default
+    uint256 public allowedExchangeRateChangeUpper = 10050; // 100.5% default
 
     /// @notice The lower bound multiplier for price changes (scaled by 1e4)
-    uint16 public allowedExchangeRateChangeLower = 9500;  // 95% default
+    uint256 public allowedExchangeRateChangeLower = 9500; // 95% default
 
-    /// @notice Last valid answer
-    int256 private _latestAnswer;  // Changed from uint256 to int256
+    /// @notice The multiplier for EMA calculation (scaled by 1e4)
+    /// @dev Calculated as: 2/(N+1) where N=10 (days)
+    /// 2/(10+1) ≈ 0.2 = 20% = 2000 (scaled by 1e4)
+    uint256 public multiplier = 2000; // 0.2 or 20% weight for new price
 
-    /// @notice Size of the moving average window
-    uint256 public constant WINDOW_SIZE = 24; 
+    /// @notice The current EMA value
+    int256 private currentEMA;
 
-    /// @notice Array to store historical prices
-    int256[WINDOW_SIZE] private priceHistory;
-    
-    /// @notice Current index in the circular buffer
-    uint256 private currentIndex;
-    
-    /// @notice Number of prices recorded
-    uint256 private numPrices;
+    /// @notice The timestamp of the last price update
+    uint256 public lastUpdateTimestamp;
 
-
-    /***************************************
-    EVENTS
-    ***************************************/
-    
+    /**
+     *
+     * EVENTS
+     *
+     */
     event PrimaryOracleUpdated(address indexed oldOracle, address indexed newOracle);
     event FallbackOracleUpdated(address indexed oldOracle, address indexed newOracle);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event MaxPriceAgeUpdated(uint256 oldMaxAge, uint256 newMaxAge);
-    event BoundsUpdated(uint16 newUpper, uint16 newLower);
-    event PriceUpdated(uint256 oldPrice, uint256 newPrice);
+    event BoundsUpdated(uint256 newUpper, uint256 newLower);
     event MovingAverageUpdated(uint256 oldMA, uint256 newMA);
+    event MultiplierUpdated(uint256 oldMultiplier, uint256 newMultiplier);
+    event PrimaryPriceUsed(uint256 price);
+    event FallbackPriceUsed(uint256 price, string reason);
 
-    /***************************************
-    ERRORS
-    ***************************************/
-    
+    /**
+     *
+     * ERRORS
+     *
+     */
     error AddressZero();
     error NotOwner();
     error InvalidBounds();
-    error InsufficientPriceHistory();
-    
-    /***************************************
-    MODIFIERS
-    ***************************************/
+    error InvalidMultiplier();
 
+    /**
+     *
+     * MODIFIERS
+     *
+     */
     modifier onlyOwner() {
         if (msg.sender != owner) revert NotOwner();
         _;
     }
 
-    /***************************************
-    CONSTRUCTOR
-    ***************************************/
-    
+    /**
+     *
+     * CONSTRUCTOR
+     *
+     */
+
     /// @notice Constructs the sSuperUSDOracle contract
     /// @param _collateralToken The address of the collateral token
     /// @param _loanToken The address of the loan token
     /// @param _sSuperUSDOracleAddress The address of the primary sSuperUSD oracle
     /// @param _sSuperUSDFallbackOracleAddress The address of the fallback sSuperUSD oracle
     constructor(
-        address _collateralToken, 
-        address _loanToken, 
+        address _collateralToken,
+        address _loanToken,
         address _sSuperUSDOracleAddress,
         address _sSuperUSDFallbackOracleAddress
     ) {
-        if (_collateralToken == address(0) || 
-            _loanToken == address(0) || 
-            _sSuperUSDOracleAddress == address(0) ||
-            _sSuperUSDFallbackOracleAddress == address(0)
+        if (
+            _collateralToken == address(0) || _loanToken == address(0) || _sSuperUSDOracleAddress == address(0)
+                || _sSuperUSDFallbackOracleAddress == address(0)
         ) {
             revert AddressZero();
         }
-        
+
         collateralToken = _collateralToken;
         loanToken = _loanToken;
         sSuperUSDOracleAddress = _sSuperUSDOracleAddress;
         sSuperUSDFallbackOracleAddress = _sSuperUSDFallbackOracleAddress;
         owner = msg.sender;
-        
+
         // Get decimals from token contracts
         collateralDecimals = IERC20Metadata(_collateralToken).decimals();
         loanDecimals = IERC20Metadata(_loanToken).decimals();
-    }
-    
-    /***************************************
-    ORACLE FUNCTIONS
-    ***************************************/
-    
-    /// @notice Computes and updates the exchange rate of the collateral token in terms of the loan token, scaled by 1e36
-    /// @dev Attempts to retrieve the rate from the primary oracle first; if unsuccessful, it uses the fallback oracle
-    function updatePrice() public {
-        bool isPrimaryFresh = false;
-        bool isPriceOutOfRange = false;
-        int256 answer;
-        int256 oldMA = calculateMovingAverage();
 
-        // Fresh check
+        // Initialize currentEMA with first price
+        ( /* roundId */ , int256 initialPrice, /* startedAt */, /* updatedAt */, /* answeredInRound */ ) =
+            IsSuperUSDOracle(_sSuperUSDOracleAddress).latestRoundData();
+        currentEMA = initialPrice;
+    }
+
+    /**
+     *
+     * ORACLE FUNCTIONS
+     *
+     */
+
+    /// @notice Computes and updates the exchange rate using EMA
+    function updatePrice() public {
         address primaryAccountant = IsSuperUSDOracle(sSuperUSDOracleAddress).sSuperUSDAccountant();
         IAccountant.AccountantState memory state = IAccountant(primaryAccountant).accountantState();
 
+        if (state.lastUpdateTimestamp == lastUpdateTimestamp) {
+            emit PrimaryPriceUsed(uint256(currentEMA));
+            return;
+        }
+
+        bool isPrimaryFresh = false;
+        bool isPriceOutOfRange = false;
+        int256 newPrice;
+        int256 oldEMA = currentEMA;
+
+        // Fresh check
         if (block.timestamp - state.lastUpdateTimestamp <= maxPriceAge) {
             isPrimaryFresh = true;
         }
 
         // Bound check
         if (isPrimaryFresh) {
-            if(oldMA != 0) {
-                (/* roundId */, answer, /* startedAt */, /* updatedAt */, /* answeredInRound */) = IsSuperUSDOracle(sSuperUSDOracleAddress).latestRoundData();
-                if (uint256(answer) > uint256(oldMA).mulDivDown(allowedExchangeRateChangeUpper, 1e4) ||
-                    uint256(answer) < uint256(oldMA).mulDivDown(allowedExchangeRateChangeLower, 1e4)) {
-                    isPriceOutOfRange = true;
-                }
+            ( /* roundId */ , newPrice, /* startedAt */, /* updatedAt */, /* answeredInRound */ ) =
+                IsSuperUSDOracle(sSuperUSDOracleAddress).latestRoundData();
+
+            if (
+                uint256(newPrice) > uint256(oldEMA).mulDivDown(allowedExchangeRateChangeUpper, 1e4)
+                    || uint256(newPrice) < uint256(oldEMA).mulDivDown(allowedExchangeRateChangeLower, 1e4)
+            ) {
+                isPriceOutOfRange = true;
+            }
+
+            if (!isPriceOutOfRange) {
+                emit PrimaryPriceUsed(uint256(newPrice));
             }
         }
 
         // Use fallback oracle if primary price is invalid
         if (!isPrimaryFresh || isPriceOutOfRange) {
-            (/* roundId */, answer, /* startedAt */, /* updatedAt */, /* answeredInRound */) = 
+            ( /* roundId */ , newPrice, /* startedAt */, /* updatedAt */, /* answeredInRound */ ) =
                 IsSuperUSDOracle(sSuperUSDFallbackOracleAddress).latestRoundData();
+
+            string memory reason = !isPrimaryFresh ? "stale_price" : "price_out_of_bounds";
+            emit FallbackPriceUsed(uint256(newPrice), reason);
         }
 
-        // Update price history
-        priceHistory[currentIndex] = answer;
-        currentIndex = (currentIndex + 1) % WINDOW_SIZE;
-        if (numPrices < WINDOW_SIZE) {
-            numPrices++;
-        }
+        // Calculate new EMA
+        // EMA = α * currentPrice + (1 - α) * previousEMA
+        // where α is the multiplier = 2/(N+1), N=10 days
+        // 2/(10+1) ≈ 0.2 = 20% = 2000 (scaled by 1e4)
+        uint256 multiplierValue = uint256(multiplier);
+        currentEMA = (newPrice * int256(multiplierValue) + oldEMA * int256(10000 - multiplierValue)) / int256(10000);
 
-        // Calculate and store new moving average
-        int256 newMA = calculateMovingAverage();
-        _latestAnswer = newMA;
-        
-        // update bound based on newMA
-        allowedExchangeRateChangeUpper = uint16(newMA.mulDivDown(allowedExchangeRateChangeUpper, 1e4));
-        allowedExchangeRateChangeLower = uint16(newMA.mulDivDown(allowedExchangeRateChangeLower, 1e4));
-        
-        // emit events
-        emit PriceUpdated(uint256(oldMA), uint256(newMA));
-        emit MovingAverageUpdated(uint256(oldMA), uint256(newMA));
+        // Update bounds based on new EMA
+        allowedExchangeRateChangeUpper = uint256(10050).mulDivDown(uint256(currentEMA), 1e8);
+        allowedExchangeRateChangeLower = uint256(9500).mulDivDown(uint256(currentEMA), 1e8);
+
+        // Emit events
+        emit MovingAverageUpdated(uint256(oldEMA), uint256(currentEMA));
         emit BoundsUpdated(allowedExchangeRateChangeUpper, allowedExchangeRateChangeLower);
+
+        // Update lastUpdateTimestamp
+        lastUpdateTimestamp = state.lastUpdateTimestamp;
     }
 
-    /// @notice Calculates the moving average of stored prices
-    /// @return The moving average price
+    /// @notice Returns the current EMA value
+    /// @return The current EMA value
     function calculateMovingAverage() public view returns (int256) {
-        if (numPrices == 0) return 0;
-        
-        int256 sum = 0;
-        uint256 count = numPrices;
-        
-        for (uint256 i = 0; i < count; i++) {
-            sum += priceHistory[i];
-        }
-        
-        return sum / int256(count);
+        return currentEMA;
     }
 
     /// @notice Returns the latest valid exchange rate without updating it
@@ -212,14 +223,22 @@ contract sSuperUSDMorphoOracle is IOracle, ReentrancyGuard {
         return maPrice * (10 ** (targetPrecision - 8));
     }
 
-    /***************************************
-    ADMIN FUNCTIONS
-    ***************************************/
+    /**
+     *
+     * ADMIN FUNCTIONS
+     *
+     */
 
     /// @notice Updates the primary oracle address
     /// @param _newOracle The new oracle address
     function updatePrimaryOracle(address _newOracle) external onlyOwner {
         if (_newOracle == address(0)) revert AddressZero();
+
+        // Get latest price from new oracle to validate it's not zero
+        ( /* roundId */ , int256 newPrice, /* startedAt */, /* updatedAt */, /* answeredInRound */ ) =
+            IsSuperUSDOracle(_newOracle).latestRoundData();
+        if (newPrice == 0) revert("Zero price not allowed");
+
         address oldOracle = sSuperUSDOracleAddress;
         sSuperUSDOracleAddress = _newOracle;
         emit PrimaryOracleUpdated(oldOracle, _newOracle);
@@ -252,24 +271,37 @@ contract sSuperUSDMorphoOracle is IOracle, ReentrancyGuard {
         emit OwnershipTransferred(oldOwner, _newOwner);
     }
 
-    /***************************************
-    VIEW FUNCTIONS
-    ***************************************/
-    
+    /// @notice Updates the multiplier for EMA calculation
+    /// @param _newMultiplier The new multiplier (scaled by 1e4)
+    /// @dev The multiplier is calculated as 2/(N+1) where N is the number of days
+    /// For N=10 days: 2/(10+1) ≈ 0.2 = 20% = 2000 (scaled by 1e4)
+    function updateMultiplier(uint256 _newMultiplier) external onlyOwner {
+        if (_newMultiplier == 0 || _newMultiplier > 10000) revert InvalidMultiplier();
+        uint256 oldMultiplier = multiplier;
+        multiplier = _newMultiplier;
+        emit MultiplierUpdated(uint16(oldMultiplier), uint16(_newMultiplier));
+    }
+
+    /**
+     *
+     * VIEW FUNCTIONS
+     *
+     */
+
     /// @notice Get the precision used by this oracle
     /// @return The number of decimals in the price returned by this oracle
     function getPrecision() external view returns (uint256) {
         return 36 + loanDecimals - collateralDecimals;
     }
-    
+
     /// @notice Get collateral token info
     /// @return token The collateral token address
     /// @return decimals The collateral token decimals
     function getCollateralInfo() external view returns (address token, uint8 decimals) {
         return (collateralToken, collateralDecimals);
     }
-    
-    /// @notice Get loan token info  
+
+    /// @notice Get loan token info
     /// @return token The loan token address
     /// @return decimals The loan token decimals
     function getLoanInfo() external view returns (address token, uint8 decimals) {

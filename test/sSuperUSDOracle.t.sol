@@ -21,26 +21,23 @@ contract sSuperUSDOracleTest is Test {
 
     function setUp() public {
         // Create and select fork
-        arbitrumFork = vm.createFork(
-            vm.envString("ARBITRUM_RPC_URL"),
-            forkBlock
-        );
+        arbitrumFork = vm.createFork(vm.envString("ARBITRUM_RPC_URL"), forkBlock);
         vm.selectFork(arbitrumFork);
-        
+
         // Set up test addresses
         owner = address(this);
         accountant = makeAddr("accountant"); // Create a mock accountant address
-        
+
         // Deploy oracle
         oracle = new sSuperUSDOracle(accountant);
-        
+
         // Verify initial state
         assertEq(oracle.owner(), address(this));
         assertEq(oracle.sSuperUSDAccountant(), accountant);
     }
 
     // Test constructor
-    function test_Constructor() public view{
+    function test_Constructor() public view {
         assertEq(oracle.owner(), address(this));
         assertEq(oracle.sSuperUSDAccountant(), accountant);
         assertEq(oracle.lastUpdateTimestamp(), block.timestamp);
@@ -55,10 +52,10 @@ contract sSuperUSDOracleTest is Test {
     // Test ownership transfer
     function test_TransferOwnership() public {
         address newOwner = makeAddr("newOwner");
-        
+
         vm.expectEmit(true, true, false, false);
         emit OwnershipTransferred(address(this), newOwner);
-        
+
         oracle.transferOwnership(newOwner);
         assertEq(oracle.owner(), newOwner);
     }
@@ -85,13 +82,8 @@ contract sSuperUSDOracleTest is Test {
         oracle = new sSuperUSDOracle(accountantAddress);
 
         // Get latest round data
-        (
-            uint80 roundId,
-            int256 answer,
-            uint256 startedAt,
-            uint256 updatedAt,
-            uint80 answeredInRound
-        ) = oracle.latestRoundData();
+        (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound) =
+            oracle.latestRoundData();
 
         // Verify the returned values
         assertEq(roundId, 0);
