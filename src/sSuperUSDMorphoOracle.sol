@@ -59,6 +59,9 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
     /// @notice The current EMA value
     int256 private currentEMA;
 
+    /// @notice The timestamp of the last price update
+    uint256 public lastUpdateTimestamp;
+
     /**
      *
      * EVENTS
@@ -142,15 +145,20 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
 
     /// @notice Computes and updates the exchange rate using EMA
     function updatePrice() public {
+        address primaryAccountant = IsSuperUSDOracle(sSuperUSDOracleAddress).sSuperUSDAccountant();
+        IAccountant.AccountantState memory state = IAccountant(primaryAccountant).accountantState();
+
+        if (state.lastUpdateTimestamp == lastUpdateTimestamp) {
+            emit PrimaryPriceUsed(uint256(currentEMA));
+            return;
+        }
+
         bool isPrimaryFresh = false;
         bool isPriceOutOfRange = false;
         int256 newPrice;
         int256 oldEMA = currentEMA;
 
         // Fresh check
-        address primaryAccountant = IsSuperUSDOracle(sSuperUSDOracleAddress).sSuperUSDAccountant();
-        IAccountant.AccountantState memory state = IAccountant(primaryAccountant).accountantState();
-
         if (block.timestamp - state.lastUpdateTimestamp <= maxPriceAge) {
             isPrimaryFresh = true;
         }
@@ -195,6 +203,9 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
         // Emit events
         emit MovingAverageUpdated(uint256(oldEMA), uint256(currentEMA));
         emit BoundsUpdated(allowedExchangeRateChangeUpper, allowedExchangeRateChangeLower);
+
+        // Update lastUpdateTimestamp
+        lastUpdateTimestamp = state.lastUpdateTimestamp;
     }
 
     /// @notice Returns the current EMA value

@@ -341,7 +341,15 @@ contract sSuperUSDMorphoOracleTest is Test {
             "second upper and lower", oracle.allowedExchangeRateChangeUpper(), oracle.allowedExchangeRateChangeLower()
         );
 
+        // Simulate a 12 hours time passage
+        vm.warp(block.timestamp + 12 hours);
+
+        IAccountant.AccountantState memory accountantState = accountant.accountantState();
+        accountantState.lastUpdateTimestamp = uint64(block.timestamp);
+        accountant.setState(accountantState);
+
         primaryOracle.setRate(int256(uint256(currentMA).mulDivDown(10200, 1e4))); // +2%
+
         (, price,,,) = fallbackOracle.latestRoundData();
 
         expectedMA = (price * int256(multiplier) + currentMA * int256(10000 - multiplier)) / 10000;
@@ -365,6 +373,13 @@ contract sSuperUSDMorphoOracleTest is Test {
         console.log(
             "third upper and lower", oracle.allowedExchangeRateChangeUpper(), oracle.allowedExchangeRateChangeLower()
         );
+
+        // Simulate a 12 hours time passage
+        vm.warp(block.timestamp + 12 hours);
+
+        accountantState = accountant.accountantState();
+        accountantState.lastUpdateTimestamp = uint64(block.timestamp);
+        accountant.setState(accountantState);
 
         price = int256(uint256(currentMA).mulDivDown(10100, 1e4));
         primaryOracle.setRate(price);
@@ -391,9 +406,14 @@ contract sSuperUSDMorphoOracleTest is Test {
             "fourth upper and lower", oracle.allowedExchangeRateChangeUpper(), oracle.allowedExchangeRateChangeLower()
         );
 
+        vm.warp(block.timestamp + 12 hours);
+
         IAccountant.AccountantState memory state = accountant.accountantState();
-        state.lastUpdateTimestamp = uint64(block.timestamp - oracle.maxPriceAge() - 1);
+        state.lastUpdateTimestamp = uint64(block.timestamp);
         accountant.setState(state);
+
+        // Simulate a 48 hours time passage
+        vm.warp(block.timestamp + 2 days);
 
         (, price,,,) = fallbackOracle.latestRoundData();
         expectedMA = (price * int256(multiplier) + currentMA * int256(10000 - multiplier)) / 10000;
