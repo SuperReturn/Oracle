@@ -86,27 +86,19 @@ contract sSuperUSDMorphoOracle is IOracle, ReentrancyGuard {
     address public owner;
     
     /// @notice The upper bound multiplier for price changes (scaled by 1e4)
-    uint16 public allowedExchangeRateChangeUpper = 10050; // 100.5% default
+    uint256 public allowedExchangeRateChangeUpper = 10050; // 100.5% default
 
     /// @notice The lower bound multiplier for price changes (scaled by 1e4)
-    uint16 public allowedExchangeRateChangeLower = 9500;  // 95% default
+    uint256 public allowedExchangeRateChangeLower = 9500;  // 95% default
 
-    /// @notice Last valid answer
-    int256 private _latestAnswer;  // Changed from uint256 to int256
-
-    /// @notice Size of the moving average window
-    uint256 public constant WINDOW_SIZE = 24; 
-
-    /// @notice Array to store historical prices
-    int256[WINDOW_SIZE] private priceHistory;
+    /// @notice The multiplier for EMA calculation (scaled by 1e4)
+    /// @dev Calculated as: 2/(N+1) where N=10 (days)
+    /// 2/(10+1) ≈ 0.2 = 20% = 2000 (scaled by 1e4)
+    uint256 public multiplier = 2000; // 0.2 or 20% weight for new price
     
-    /// @notice Current index in the circular buffer
-    uint256 private currentIndex;
+    /// @notice The current EMA value
+    int256 private currentEMA;
     
-    /// @notice Number of prices recorded
-    uint256 private numPrices;
-
-
     /***************************************
     EVENTS
     ***************************************/
@@ -115,9 +107,10 @@ contract sSuperUSDMorphoOracle is IOracle, ReentrancyGuard {
     event FallbackOracleUpdated(address indexed oldOracle, address indexed newOracle);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event MaxPriceAgeUpdated(uint256 oldMaxAge, uint256 newMaxAge);
-    event BoundsUpdated(uint16 newUpper, uint16 newLower);
+    event BoundsUpdated(uint256 newUpper, uint256 newLower);
     event PriceUpdated(uint256 oldPrice, uint256 newPrice);
     event MovingAverageUpdated(uint256 oldMA, uint256 newMA);
+    event MultiplierUpdated(uint256 oldMultiplier, uint256 newMultiplier);
 
     /***************************************
     ERRORS
@@ -126,7 +119,7 @@ contract sSuperUSDMorphoOracle is IOracle, ReentrancyGuard {
     error AddressZero();
     error NotOwner();
     error InvalidBounds();
-    error InsufficientPriceHistory();
+    error InvalidMultiplier();
     
     /***************************************
     MODIFIERS
@@ -169,19 +162,23 @@ contract sSuperUSDMorphoOracle is IOracle, ReentrancyGuard {
         // Get decimals from token contracts
         collateralDecimals = IERC20Metadata(_collateralToken).decimals();
         loanDecimals = IERC20Metadata(_loanToken).decimals();
+
+        // Initialize currentEMA with first price
+        (/* roundId */, int256 initialPrice, /* startedAt */, /* updatedAt */, /* answeredInRound */) = 
+            IsSuperUSDOracle(_sSuperUSDOracleAddress).latestRoundData();
+        currentEMA = initialPrice;
     }
     
     /***************************************
     ORACLE FUNCTIONS
     ***************************************/
     
-    /// @notice Computes and updates the exchange rate of the collateral token in terms of the loan token, scaled by 1e36
-    /// @dev Attempts to retrieve the rate from the primary oracle first; if unsuccessful, it uses the fallback oracle
+    /// @notice Computes and updates the exchange rate using EMA
     function updatePrice() public {
         bool isPrimaryFresh = false;
         bool isPriceOutOfRange = false;
-        int256 answer;
-        int256 oldMA = calculateMovingAverage();
+        int256 newPrice;
+        int256 oldEMA = currentEMA;
 
         // Fresh check
         address primaryAccountant = IsSuperUSDOracle(sSuperUSDOracleAddress).sSuperUSDAccountant();
@@ -193,55 +190,42 @@ contract sSuperUSDMorphoOracle is IOracle, ReentrancyGuard {
 
         // Bound check
         if (isPrimaryFresh) {
-            if(oldMA != 0) {
-                (/* roundId */, answer, /* startedAt */, /* updatedAt */, /* answeredInRound */) = IsSuperUSDOracle(sSuperUSDOracleAddress).latestRoundData();
-                if (uint256(answer) > uint256(oldMA).mulDivDown(allowedExchangeRateChangeUpper, 1e4) ||
-                    uint256(answer) < uint256(oldMA).mulDivDown(allowedExchangeRateChangeLower, 1e4)) {
-                    isPriceOutOfRange = true;
-                }
+            (/* roundId */, newPrice, /* startedAt */, /* updatedAt */, /* answeredInRound */) = 
+                IsSuperUSDOracle(sSuperUSDOracleAddress).latestRoundData();
+                
+            if (uint256(newPrice) > uint256(oldEMA).mulDivDown(allowedExchangeRateChangeUpper, 1e4) ||
+                uint256(newPrice) < uint256(oldEMA).mulDivDown(allowedExchangeRateChangeLower, 1e4)) {
+                isPriceOutOfRange = true;
             }
         }
 
         // Use fallback oracle if primary price is invalid
         if (!isPrimaryFresh || isPriceOutOfRange) {
-            (/* roundId */, answer, /* startedAt */, /* updatedAt */, /* answeredInRound */) = 
+            (/* roundId */, newPrice, /* startedAt */, /* updatedAt */, /* answeredInRound */) = 
                 IsSuperUSDOracle(sSuperUSDFallbackOracleAddress).latestRoundData();
         }
 
-        // Update price history
-        priceHistory[currentIndex] = answer;
-        currentIndex = (currentIndex + 1) % WINDOW_SIZE;
-        if (numPrices < WINDOW_SIZE) {
-            numPrices++;
-        }
-
-        // Calculate and store new moving average
-        int256 newMA = calculateMovingAverage();
-        _latestAnswer = newMA;
+        // Calculate new EMA
+        // EMA = α * currentPrice + (1 - α) * previousEMA
+        // where α is the multiplier = 2/(N+1), N=10 days
+        // 2/(10+1) ≈ 0.2 = 20% = 2000 (scaled by 1e4)
+        uint256 multiplierValue = uint256(multiplier);
+        currentEMA = (newPrice * int256(multiplierValue) + oldEMA * int256(10000 - multiplierValue)) / int256(10000);
         
-        // update bound based on newMA
-        allowedExchangeRateChangeUpper = uint16(newMA.mulDivDown(allowedExchangeRateChangeUpper, 1e4));
-        allowedExchangeRateChangeLower = uint16(newMA.mulDivDown(allowedExchangeRateChangeLower, 1e4));
+        // Update bounds based on new EMA
+        allowedExchangeRateChangeUpper = uint256(currentEMA).mulDivDown(10050, 1e4); // 100.5%
+        allowedExchangeRateChangeLower = uint256(currentEMA).mulDivDown(9500, 1e4);  // 95%
         
-        // emit events
-        emit PriceUpdated(uint256(oldMA), uint256(newMA));
-        emit MovingAverageUpdated(uint256(oldMA), uint256(newMA));
+        // Emit events
+        emit PriceUpdated(uint256(oldEMA), uint256(currentEMA));
+        emit MovingAverageUpdated(uint256(oldEMA), uint256(currentEMA));
         emit BoundsUpdated(allowedExchangeRateChangeUpper, allowedExchangeRateChangeLower);
     }
 
-    /// @notice Calculates the moving average of stored prices
-    /// @return The moving average price
+    /// @notice Returns the current EMA value
+    /// @return The current EMA value
     function calculateMovingAverage() public view returns (int256) {
-        if (numPrices == 0) return 0;
-        
-        int256 sum = 0;
-        uint256 count = numPrices;
-        
-        for (uint256 i = 0; i < count; i++) {
-            sum += priceHistory[i];
-        }
-        
-        return sum / int256(count);
+        return currentEMA;
     }
 
     /// @notice Returns the latest valid exchange rate without updating it
@@ -291,6 +275,17 @@ contract sSuperUSDMorphoOracle is IOracle, ReentrancyGuard {
         address oldOwner = owner;
         owner = _newOwner;
         emit OwnershipTransferred(oldOwner, _newOwner);
+    }
+
+    /// @notice Updates the multiplier for EMA calculation
+    /// @param _newMultiplier The new multiplier (scaled by 1e4)
+    /// @dev The multiplier is calculated as 2/(N+1) where N is the number of days
+    /// For N=10 days: 2/(10+1) ≈ 0.2 = 20% = 2000 (scaled by 1e4)
+    function updateMultiplier(uint256 _newMultiplier) external onlyOwner {
+        if (_newMultiplier == 0 || _newMultiplier > 10000) revert InvalidMultiplier();
+        uint256 oldMultiplier = multiplier;
+        multiplier = _newMultiplier;
+        emit MultiplierUpdated(uint16(oldMultiplier), uint16(_newMultiplier));
     }
 
     /***************************************
