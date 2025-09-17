@@ -18,9 +18,19 @@ contract sSuperUSDFallbackOracle /*is IsSuperUSDOracle*/ {
     bool public immutable zeroForOne;
     uint8 public immutable decimals0;
     uint8 public immutable decimals1;
+    uint256 internal immutable scale0;
+    uint256 internal immutable scale1;
+    uint256 internal constant scalePrice = 10**8; // 8 decimals
 
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event TwapIntervalSet(uint32 twapInterval);
 
+    /// @notice Construct the sSuperUSDFallbackOracle contract.
+    /// @param _uniV3Pool The address of the Uniswap V3 pool.
+    /// @param _zeroForOne The direction of the price measurement. True to return the price of token1 in terms of token0, false to return the price of token0 in terms of token1.
+    /// @param _decimals0 The number of decimals of token0.
+    /// @param _decimals1 The number of decimals of token1.
+    /// @param _twapInterval The interval in seconds to look back in pool observations.
     constructor(
         address _uniV3Pool,
         bool _zeroForOne,
@@ -29,12 +39,15 @@ contract sSuperUSDFallbackOracle /*is IsSuperUSDOracle*/ {
         uint32 _twapInterval
     ) {
         if(_uniV3Pool == address(0)) revert ("Pool cannot be zero address");
+        _setTwapInterval(_twapInterval);
         uniV3Pool = _uniV3Pool;
         zeroForOne = _zeroForOne;
         decimals0 = _decimals0;
         decimals1 = _decimals1;
-        _setTwapInterval(_twapInterval);
+        scale0 = 10**_decimals0;
+        scale1 = 10**_decimals1;
         owner = msg.sender;
+        emit OwnershipTransferred(address(0), msg.sender);
     }
 
     modifier onlyOwner() {
@@ -42,27 +55,37 @@ contract sSuperUSDFallbackOracle /*is IsSuperUSDOracle*/ {
         _;
     }
 
+    function transferOwnership(address newOwner) external onlyOwner {
+        require(newOwner != address(0), "New owner cannot be zero address");
+        address oldOwner = owner;
+        owner = newOwner;
+        emit OwnershipTransferred(oldOwner, newOwner);
+    }
+
     function latestAnswer() external view returns (int256) {
+        // create params for observations
         uint32[] memory secondsAgos = new uint32[](2);
         secondsAgos[0] = twapInterval; // from (before)
         secondsAgos[1] = 0; // to (now)
 
+        // read observations from pool
         (int56[] memory tickCumulatives, ) = IUniswapV3PoolMinimal(uniV3Pool).observe(secondsAgos);
         
-        // tick(imprecise as it's an integer) to price
+        // convert tick to sqrt price
         uint160 sqrtPriceX96 = TickMath.getSqrtRatioAtTick(
+            // calculate average tick over interval
             toInt24((tickCumulatives[1] - tickCumulatives[0]) / int56(uint56(twapInterval)))
         );
 
+        // convert sqrt price to price at tick
         uint256 priceX96 = FullMath.mulDiv(sqrtPriceX96, sqrtPriceX96, FixedPoint96.Q96);
         
-        
+        // convert price to a useable format
         if(zeroForOne) {
-            return int256(FullMath.mulDiv(priceX96, 10**decimals1, 10**decimals0));
+            return int256(priceX96 * scale0 * scalePrice / (FixedPoint96.Q96 * scale1));
         } else {
-            return int256(FullMath.mulDiv(10**decimals0, 10**decimals1, priceX96));
+            return int256(FixedPoint96.Q96 * scale1 * scalePrice / (priceX96 * scale0));
         }
-        
     }
 
     function toInt24(int56 x) internal pure returns (int24) {
@@ -71,12 +94,6 @@ contract sSuperUSDFallbackOracle /*is IsSuperUSDOracle*/ {
         return int24(x);
     }
 
-    /*
-    function getPriceX96FromSqrtPriceX96(uint160 sqrtPriceX96) public pure returns(uint256 priceX96) {
-        return FullMath.mulDiv(sqrtPriceX96, sqrtPriceX96, FixedPoint96.Q96);
-    }
-    */
-
     function setTwapInterval(uint32 _twapInterval) external onlyOwner {
         _setTwapInterval(_twapInterval);
     }
@@ -84,5 +101,6 @@ contract sSuperUSDFallbackOracle /*is IsSuperUSDOracle*/ {
     function _setTwapInterval(uint32 _twapInterval) internal {
         if(_twapInterval == 0) revert ("Twap interval cannot be 0");
         twapInterval = _twapInterval;
+        emit TwapIntervalSet(_twapInterval);
     }
 }
