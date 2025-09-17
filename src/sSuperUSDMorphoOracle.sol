@@ -1,60 +1,19 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.21;
 
+import { IMorphoOracle } from "./interfaces/IMorphoOracle.sol";
+import { IsSuperUSDOracle } from "./interfaces/IsSuperUSDOracle.sol";
+import { IAccountant } from "./interfaces/IAccountant.sol";
 import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import { FixedPointMathLib } from "@solmate/utils/FixedPointMathLib.sol";
 
-/// @title IOracle
-/// @author Morpho Labs
-/// @custom:contact security@morpho.org
-/// @notice Interface that oracles used by Morpho must implement.
-/// @dev It is the user's responsibility to select markets with safe oracles.
-interface IOracle {
-    /// @notice Returns the price of 1 asset of collateral token quoted in 1 asset of loan token, scaled by 1e36.
-    /// @dev It corresponds to the price of 10**(collateral token decimals) assets of collateral token quoted in
-    /// 10**(loan token decimals) assets of loan token with `36 + loan token decimals - collateral token decimals`
-    /// decimals of precision.
-    function price() external view returns (uint256);
-}
-
-/// @title IsSuperUSDOracle
-/// @notice Interface for sSuperUSD Oracle that provides exchange rate data
-interface IsSuperUSDOracle {
-    function latestRoundData()
-        external
-        view
-        returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound);
-    
-    // Add accountant getter
-    function sSuperUSDAccountant() external view returns (address);
-}
-
-// Add interface for accountant state
-interface IAccountant {
-    struct AccountantState {
-        address payoutAddress;
-        uint96 highwaterMark;
-        uint128 feesOwedInBase;
-        uint128 totalSharesLastUpdate;
-        uint96 exchangeRate;
-        uint16 allowedExchangeRateChangeUpper;
-        uint16 allowedExchangeRateChangeLower;
-        uint64 lastUpdateTimestamp;
-        bool isPaused;
-        uint24 minimumUpdateDelayInSeconds;
-        uint16 platformFee;
-        uint16 performanceFee;
-    }
-
-    function accountantState() external view returns (AccountantState memory);
-}
 
 /// @title sSuperUSDOracle
 /// @author SuperReturn
 /// @notice Oracle contract for sSuperUSD that implements IOracle interface
 /// @dev This oracle gets the exchange rate from an external sSuperUSD oracle and converts it to Morpho format
-contract sSuperUSDMorphoOracle is IOracle, ReentrancyGuard {
+contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
     using FixedPointMathLib for uint256;
 
     /***************************************

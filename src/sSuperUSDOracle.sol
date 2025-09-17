@@ -1,16 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.21;
 
-interface IsSuperUSDOracle {
-    function latestRoundData()
-    external
-    view
-    returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound);
-}
-
-interface IAccountant {
-    function getRate() external view returns (uint256);
-}
+import {IsSuperUSDOracle} from "./interfaces/IsSuperUSDOracle.sol";
+import {IAccountant} from "./interfaces/IAccountant.sol";
 
 error AccountantWithRateProviders__Paused();
 error sSuperUSDOracle__StalePrice();
