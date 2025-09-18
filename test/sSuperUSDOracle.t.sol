@@ -40,7 +40,6 @@ contract sSuperUSDOracleTest is Test {
     function test_Constructor() public view {
         assertEq(oracle.owner(), address(this));
         assertEq(oracle.sSuperUSDAccountant(), accountant);
-        assertEq(oracle.lastUpdateTimestamp(), block.timestamp);
     }
 
     // Test constructor with zero address
@@ -89,8 +88,8 @@ contract sSuperUSDOracleTest is Test {
         assertEq(roundId, 0);
         // assertEq(answer, 1_000_000_00); // 1.0 with 8 decimals (converted from 6)
         assertEq(answer, int256(IAccountant(accountantAddress).getRate() * 100));
-        assertEq(startedAt, block.timestamp);
-        assertEq(updatedAt, block.timestamp);
+        assertEq(startedAt, IAccountant(accountantAddress).accountantState().lastUpdateTimestamp);
+        assertEq(updatedAt, IAccountant(accountantAddress).accountantState().lastUpdateTimestamp);
         assertEq(answeredInRound, 0);
     }
 }
