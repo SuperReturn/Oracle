@@ -45,6 +45,12 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
     /// @notice The owner of the contract who can update oracle addresses
     address public owner;
 
+    /// @notice The base upper bound for calculating exchange rate limits (scaled by 1e4)
+    uint256 public baseUpperBound = 10050; // 100.5% default
+
+    /// @notice The base lower bound for calculating exchange rate limits (scaled by 1e4)
+    uint256 public baseLowerBound = 9500; // 95% default
+
     /// @notice The upper bound multiplier for price changes (scaled by 1e4)
     uint256 public allowedExchangeRateChangeUpper = 10050; // 100.5% default
 
@@ -76,6 +82,12 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
     event MultiplierUpdated(uint256 oldMultiplier, uint256 newMultiplier);
     event PrimaryPriceUsed(uint256 price);
     event FallbackPriceUsed(uint256 price, string reason);
+    event BaseBoundsUpdated(
+        uint256 oldUpperBound,
+        uint256 oldLowerBound,
+        uint256 newUpperBound,
+        uint256 newLowerBound
+    );
 
     /**
      *
@@ -197,8 +209,8 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
         currentEMA = (newPrice * int256(multiplierValue) + oldEMA * int256(10000 - multiplierValue)) / int256(10000);
 
         // Update bounds based on new EMA
-        allowedExchangeRateChangeUpper = uint256(10050).mulDivDown(uint256(currentEMA), 1e8);
-        allowedExchangeRateChangeLower = uint256(9500).mulDivDown(uint256(currentEMA), 1e8);
+        allowedExchangeRateChangeUpper = uint256(baseUpperBound).mulDivDown(uint256(currentEMA), 1e8);
+        allowedExchangeRateChangeLower = uint256(baseLowerBound).mulDivDown(uint256(currentEMA), 1e8);
 
         // Emit events
         emit MovingAverageUpdated(uint256(oldEMA), uint256(currentEMA));
@@ -280,6 +292,25 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
         uint256 oldMultiplier = multiplier;
         multiplier = _newMultiplier;
         emit MultiplierUpdated(uint16(oldMultiplier), uint16(_newMultiplier));
+    }
+
+    /**
+     * @notice Updates the base bounds used for calculating exchange rate limits
+     * @param _newUpperBound The new base upper bound (scaled by 1e4)
+     * @param _newLowerBound The new base lower bound (scaled by 1e4)
+     */
+    function updateBaseBounds(uint256 _newUpperBound, uint256 _newLowerBound) external onlyOwner {
+        if (_newUpperBound <= 10000 || _newLowerBound >= 10000 || _newLowerBound >= _newUpperBound) {
+            revert InvalidBounds();
+        }
+        
+        uint256 oldUpper = baseUpperBound;
+        uint256 oldLower = baseLowerBound;
+        
+        baseUpperBound = _newUpperBound;
+        baseLowerBound = _newLowerBound;
+        
+        emit BaseBoundsUpdated(oldUpper, oldLower, _newUpperBound, _newLowerBound);
     }
 
     /**
