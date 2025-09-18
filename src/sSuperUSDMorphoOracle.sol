@@ -46,7 +46,7 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
     address public owner;
 
     /// @notice The base upper bound for calculating exchange rate limits (scaled by 1e4)
-    uint256 public baseUpperBound = 10050; // 100.5% default
+    uint256 public baseUpperBound = 10500; // 105% default
 
     /// @notice The base lower bound for calculating exchange rate limits (scaled by 1e4)
     uint256 public baseLowerBound = 9500; // 95% default
