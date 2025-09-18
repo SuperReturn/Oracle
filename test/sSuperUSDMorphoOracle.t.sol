@@ -412,8 +412,8 @@ contract sSuperUSDMorphoOracleTest is Test {
         state.lastUpdateTimestamp = uint64(block.timestamp);
         accountant.setState(state);
 
-        // Simulate a 48 hours time passage
-        vm.warp(block.timestamp + 2 days);
+        // Simulate a 72 hours time passage
+        vm.warp(block.timestamp + 3 days);
 
         (, price,,,) = fallbackOracle.latestRoundData();
         expectedMA = (price * int256(multiplier) + currentMA * int256(10000 - multiplier)) / 10000;
@@ -435,9 +435,9 @@ contract sSuperUSDMorphoOracleTest is Test {
 
     function test_AdminFunctions() public {
         // Test updateMaxPriceAge
-        uint256 newMaxAge = 48 hours;
+        uint256 newMaxAge = 72 hours;
         vm.expectEmit(true, true, false, true);
-        emit MaxPriceAgeUpdated(24 hours, newMaxAge);
+        emit MaxPriceAgeUpdated(48 hours, newMaxAge);
         oracle.updateMaxPriceAge(newMaxAge);
         assertEq(oracle.maxPriceAge(), newMaxAge);
 

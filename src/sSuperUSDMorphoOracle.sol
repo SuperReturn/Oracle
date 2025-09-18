@@ -22,7 +22,7 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
      */
 
     /// @notice Maximum age of price feed in seconds before considering it stale
-    uint256 public maxPriceAge = 24 hours;
+    uint256 public maxPriceAge = 48 hours;
 
     /// @notice The collateral token address
     address public immutable collateralToken;
