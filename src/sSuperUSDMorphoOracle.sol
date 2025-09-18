@@ -10,7 +10,7 @@ import {FixedPointMathLib} from "@solmate/utils/FixedPointMathLib.sol";
 
 /// @title sSuperUSDOracle
 /// @author SuperReturn
-/// @notice Oracle contract for sSuperUSD that implements IOracle interface
+/// @notice Oracle contract for sSuperUSD that implements IMorphoOracle interface
 /// @dev This oracle gets the exchange rate from an external sSuperUSD oracle and converts it to Morpho format
 contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
     using FixedPointMathLib for uint256;
