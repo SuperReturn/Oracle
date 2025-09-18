@@ -95,6 +95,15 @@ contract sSuperUSDFallbackOracleTest is Test {
         //console.log("One           :", uint256(100000000));
         // current price is 4513
         assertEq(latestAnswer, 451329115226);
+        // Get latest round data
+        (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound) =
+            oracle01.latestRoundData();
+        // Verify the returned values
+        assertEq(roundId, 0);
+        assertEq(answer, 451329115226);
+        assertEq(startedAt, block.timestamp);
+        assertEq(updatedAt, block.timestamp);
+        assertEq(answeredInRound, 0);
     }
 
     function test_LatestAnswer10() public {
@@ -103,6 +112,15 @@ contract sSuperUSDFallbackOracleTest is Test {
         //console.log("One           :", uint256(100000000));
         // 1 / 4513
         assertEq(latestAnswer, 22156);
+        // Get latest round data
+        (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound) =
+            oracle10.latestRoundData();
+        // Verify the returned values
+        assertEq(roundId, 0);
+        assertEq(answer, 22156);
+        assertEq(startedAt, block.timestamp);
+        assertEq(updatedAt, block.timestamp);
+        assertEq(answeredInRound, 0);
     }
 
     // test set twap interval by non owner

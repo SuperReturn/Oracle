@@ -2,14 +2,13 @@
 pragma solidity ^0.8.21;
 
 
-//import { IsSuperUSDOracle } from "./interfaces/IsSuperUSDOracle.sol";
 import { IUniswapV3PoolMinimal } from "./interfaces/IUniswapV3PoolMinimal.sol";
 import { TickMath } from "./libraries/TickMath.sol";
 import { FullMath } from "./libraries/FullMath.sol";
 import { FixedPoint96 } from "./libraries/FixedPoint96.sol";
 
 
-contract sSuperUSDFallbackOracle /*is IsSuperUSDOracle*/ {
+contract sSuperUSDFallbackOracle {
 
     address public owner;
     uint32 public twapInterval;
@@ -62,7 +61,23 @@ contract sSuperUSDFallbackOracle /*is IsSuperUSDOracle*/ {
         emit OwnershipTransferred(oldOwner, newOwner);
     }
 
+    function latestRoundData() external view
+        returns (
+            uint80 roundId,
+            int256 answer,
+            uint256 startedAt,
+            uint256 updatedAt,
+            uint80 answeredInRound
+        )
+    {
+        return (0, _latestAnswer(), block.timestamp, block.timestamp, 0);
+    }
+
     function latestAnswer() external view returns (int256) {
+        return _latestAnswer();
+    }
+
+    function _latestAnswer() internal view returns (int256) {
         // create params for observations
         uint32[] memory secondsAgos = new uint32[](2);
         secondsAgos[0] = twapInterval; // from (before)
@@ -89,7 +104,6 @@ contract sSuperUSDFallbackOracle /*is IsSuperUSDOracle*/ {
     }
 
     function toInt24(int56 x) internal pure returns (int24) {
-        // todo: should this just truncate?
         if(x > type(int24).max) revert ("Overflow cast to int24");
         return int24(x);
     }
