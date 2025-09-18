@@ -124,6 +124,7 @@ contract sSuperUSDMorphoOracleTest is Test {
     event MultiplierUpdated(uint256 oldMultiplier, uint256 newMultiplier);
     event PrimaryPriceUsed(uint256 price);
     event FallbackPriceUsed(uint256 price, string reason);
+    event NoPriceUpdate(string reason, uint256 primaryPrice, uint256 fallbackPrice);
 
     function setUp() public {
         // Create and select fork
@@ -156,6 +157,12 @@ contract sSuperUSDMorphoOracleTest is Test {
         assertEq(oracle.owner(), address(this));
         assertEq(oracle.collateralDecimals(), 18);
         assertEq(oracle.loanDecimals(), 6);
+        assertEq(oracle.latestEMA(), 1e8);
+        assertEq(oracle.latestAnswer(), 1e8);
+        assertEq(oracle.lastUpdateTimestamp(), 0);
+        assertEq(oracle.maxPriceAge(), 48 hours);
+        assertEq(oracle.baseUpperBound(), 10500);
+        assertEq(oracle.baseLowerBound(), 9500);
     }
 
     function test_Constructor_RevertZeroAddress() public {
@@ -168,10 +175,13 @@ contract sSuperUSDMorphoOracleTest is Test {
         (, int256 initialPrice,,,) = primaryOracle.latestRoundData();
 
         // Get initial moving average
-        int256 initialMA = oracle.calculateMovingAverage();
+        int256 initialAnswer = oracle.latestAnswer();
 
         // Initial MA should equal initial price
-        assertEq(initialMA, initialPrice);
+        assertEq(initialAnswer, initialPrice);
+
+        int256 initialEMA = oracle.latestEMA();
+        assertEq(initialEMA, initialPrice);
     }
 
     function test_UpdatePrice_ZeroPrice() public {
@@ -200,237 +210,334 @@ contract sSuperUSDMorphoOracleTest is Test {
         oracle.updateMultiplier(10001);
     }
 
-    function test_UpdatePrice_Fresh() public {
-        // Get initial EMA value
-        int256 initialEMA = oracle.calculateMovingAverage();
-        console.log("initialEMA", initialEMA);
+    function test_UpdatePrice_PrimaryOracleFreshAndInBounds() public {
+        // first condition
+        // no matter what fallback oracle price is
 
-        // Set a new price in primary oracle that's within bounds
-        // Should be within 0.5% up or 5% down of current EMA
-        uint256 newPrice = uint256(initialEMA).mulDivDown(10025, 1e4); // 0.25% increase
-        primaryOracle.setRate(int256(newPrice));
+        // set primary oracle price to 1.001e8
+        int256 newPrice = 1.001e8;
+        primaryOracle.setRate(newPrice);
+        // set accountant timestamp to 1 hour ago
+        IAccountant.AccountantState memory state = accountant.accountantState();
+        state.lastUpdateTimestamp = uint64(block.timestamp - 1 hours);
+        accountant.setState(state);
 
-        // Calculate expected new EMA before events
+        int256 newPriceForEMA = newPrice;
+        int256 oldEMA = oracle.latestEMA();
         uint256 multiplierValue = oracle.multiplier();
         int256 expectedEMA =
-            (int256(newPrice) * int256(multiplierValue) + initialEMA * int256(10000 - multiplierValue)) / int256(10000);
+            (newPriceForEMA * int256(multiplierValue) + oldEMA * int256(10000 - multiplierValue)) / int256(10000);
 
-        // Update price when primary oracle is fresh
-        vm.expectEmit(false, false, false, true);
+        uint256 expectedEMAUpperBound = uint256(expectedEMA).mulDivDown(10500, 1e4);
+        uint256 expectedEMALowerBound = uint256(expectedEMA).mulDivDown(9500, 1e4);
+
+        // check event
+        vm.expectEmit(true, true, false, true);
         emit PrimaryPriceUsed(uint256(newPrice));
-        vm.expectEmit(false, false, false, true);
-        emit MovingAverageUpdated(uint256(initialEMA), uint256(expectedEMA));
-        vm.expectEmit(false, false, false, true);
-        emit BoundsUpdated(
-            uint256(10050).mulDivDown(uint256(expectedEMA), 1e8), // 100.5%
-            uint256(9500).mulDivDown(uint256(expectedEMA), 1e8) // 95%
-        );
+        vm.expectEmit(true, true, false, true);
+        emit MovingAverageUpdated(uint256(oldEMA), uint256(expectedEMA));
+        vm.expectEmit(true, true, false, true);
+        emit BoundsUpdated(expectedEMAUpperBound, expectedEMALowerBound);
+
+        // update price
         oracle.updatePrice();
 
-        // Verify results
-        int256 newEMA = oracle.calculateMovingAverage();
-        assertEq(newEMA, expectedEMA);
-        assertEq(oracle.allowedExchangeRateChangeUpper(), uint256(10050).mulDivDown(uint256(expectedEMA), 1e8));
-        assertEq(oracle.allowedExchangeRateChangeLower(), uint256(9500).mulDivDown(uint256(expectedEMA), 1e8));
+        // verify results
+        // latestAnswer
+        assertEq(oracle.latestAnswer(), newPrice);
+        // latestEMA
+        assertEq(oracle.latestEMA(), expectedEMA);
+        // EMAUpperBound
+        assertEq(oracle.EMAUpperBound(), expectedEMAUpperBound);
+        // EMALowerBound
+        assertEq(oracle.EMALowerBound(), expectedEMALowerBound);
+        // lastUpdateTimestamp
+        assertEq(oracle.lastUpdateTimestamp(), state.lastUpdateTimestamp);
     }
 
-    function test_UpdatePrice_Stale() public {
-        // Get initial EMA
-        int256 initialEMA = oracle.calculateMovingAverage();
-        console.log("initialEMA", initialEMA);
+    function test_UpdatePrice_PrimaryOracleFreshAndOutOfBoundsAndFallbackInBounds() public {
+        // second condition
 
-        // Make primary oracle stale
+        // set primary oracle price to 1.1e8
+        int256 newPrice = 1.1e8;
+        primaryOracle.setRate(newPrice);
+        // set accountant timestamp to 1 hour ago
         IAccountant.AccountantState memory state = accountant.accountantState();
-        state.lastUpdateTimestamp = uint64(block.timestamp - oracle.maxPriceAge() - 1);
+        state.lastUpdateTimestamp = uint64(block.timestamp - 1 hours);
         accountant.setState(state);
+        // set fallback oracle price to 1.001e8
+        int256 fallbackPrice = 1.001e8;
+        fallbackOracle.setRate(fallbackPrice);
 
-        // Get fallback oracle price
-        (, int256 fallbackPrice,,,) = fallbackOracle.latestRoundData();
-
-        // Calculate expected new EMA
+        int256 newPriceForEMA = fallbackPrice; // fallback price is used
+        int256 oldEMA = oracle.latestEMA();
         uint256 multiplierValue = oracle.multiplier();
         int256 expectedEMA =
-            (fallbackPrice * int256(multiplierValue) + initialEMA * int256(10000 - multiplierValue)) / int256(10000);
+            (newPriceForEMA * int256(multiplierValue) + oldEMA * int256(10000 - multiplierValue)) / int256(10000);
 
-        // Update price - should use fallback oracle due to stale primary
-        vm.expectEmit(false, false, false, true);
-        emit FallbackPriceUsed(uint256(fallbackPrice), "stale_price");
-        vm.expectEmit(false, false, false, true);
-        emit MovingAverageUpdated(uint256(initialEMA), uint256(expectedEMA));
-        vm.expectEmit(false, false, false, true);
-        emit BoundsUpdated(
-            uint256(10050).mulDivDown(uint256(expectedEMA), 1e8), // 100.5%
-            uint256(9500).mulDivDown(uint256(expectedEMA), 1e8) // 95%
-        );
-        oracle.updatePrice();
+        uint256 expectedEMAUpperBound = uint256(expectedEMA).mulDivDown(10500, 1e4);
+        uint256 expectedEMALowerBound = uint256(expectedEMA).mulDivDown(9500, 1e4);
 
-        // Verify results
-        int256 newEMA = oracle.calculateMovingAverage();
-        assertEq(newEMA, expectedEMA);
-        assertEq(oracle.allowedExchangeRateChangeUpper(), uint256(10050).mulDivDown(uint256(expectedEMA), 1e8));
-        assertEq(oracle.allowedExchangeRateChangeLower(), uint256(9500).mulDivDown(uint256(expectedEMA), 1e8));
-    }
-
-    function test_UpdatePrice_OutOfBounds() public {
-        // Get initial EMA
-        int256 initialEMA = oracle.calculateMovingAverage();
-        console.log("initialEMA", initialEMA);
-
-        // Set primary oracle price out of bounds (50% higher)
-        primaryOracle.setRate(int256(uint256(initialEMA).mulDivDown(15000, 1e4)));
-
-        // Get fallback oracle price
-        (, int256 fallbackPrice,,,) = fallbackOracle.latestRoundData();
-
-        // Calculate expected new EMA
-        uint256 multiplierValue = oracle.multiplier();
-        int256 expectedEMA =
-            (fallbackPrice * int256(multiplierValue) + initialEMA * int256(10000 - multiplierValue)) / int256(10000);
-
-        // Update price - should use fallback oracle due to out of bounds price
-        vm.expectEmit(false, false, false, true);
+        // check event
+        vm.expectEmit(true, true, false, true);
         emit FallbackPriceUsed(uint256(fallbackPrice), "price_out_of_bounds");
-        vm.expectEmit(false, false, false, true);
-        emit MovingAverageUpdated(uint256(initialEMA), uint256(expectedEMA));
-        vm.expectEmit(false, false, false, true);
-        emit BoundsUpdated(
-            uint256(10050).mulDivDown(uint256(expectedEMA), 1e8), // 100.5%
-            uint256(9500).mulDivDown(uint256(expectedEMA), 1e8) // 95%
-        );
+        vm.expectEmit(true, true, false, true);
+        emit MovingAverageUpdated(uint256(oldEMA), uint256(expectedEMA));
+        vm.expectEmit(true, true, false, true);
+        emit BoundsUpdated(expectedEMAUpperBound, expectedEMALowerBound);
+
+        // update price
         oracle.updatePrice();
 
-        // Verify results
-        int256 newEMA = oracle.calculateMovingAverage();
-        assertEq(newEMA, expectedEMA);
-        assertEq(oracle.allowedExchangeRateChangeUpper(), uint256(10050).mulDivDown(uint256(expectedEMA), 1e8));
-        assertEq(oracle.allowedExchangeRateChangeLower(), uint256(9500).mulDivDown(uint256(expectedEMA), 1e8));
+        // verify results
+        // latestAnswer
+        assertEq(oracle.latestAnswer(), fallbackPrice);
+        // latestEMA
+        assertEq(oracle.latestEMA(), expectedEMA);
+        // EMAUpperBound
+        assertEq(oracle.EMAUpperBound(), expectedEMAUpperBound);
+        // EMALowerBound
+        assertEq(oracle.EMALowerBound(), expectedEMALowerBound);
+        // lastUpdateTimestamp
+        assertEq(oracle.lastUpdateTimestamp(), state.lastUpdateTimestamp);
     }
 
-    function test_MultipleUpdates() public {
-        uint256 multiplier = oracle.multiplier();
-        int256 currentMA = oracle.calculateMovingAverage();
-        console.log("initial MA", currentMA);
-        console.log(
-            "initial upper and lower", oracle.allowedExchangeRateChangeUpper(), oracle.allowedExchangeRateChangeLower()
-        );
+    function test_UpdatePrice_PrimaryOracleFreshAndOutOfBoundsAndFallbackOutOfBounds() public {
+        // 3-1 condition
 
-        // 1. Test fresh and within bounds (use primary oracle)
-        int256 price = int256(uint256(currentMA).mulDivDown(10020, 1e4)); // +0.2%
-        primaryOracle.setRate(price);
-
-        // Calculate expected MA and emit events
-        int256 expectedMA = (price * int256(multiplier) + currentMA * int256(10000 - multiplier)) / 10000;
-
-        vm.expectEmit(false, false, false, true);
-        emit PrimaryPriceUsed(uint256(price));
-        vm.expectEmit(false, false, false, true);
-        emit MovingAverageUpdated(uint256(currentMA), uint256(expectedMA));
-        vm.expectEmit(false, false, false, true);
-        emit BoundsUpdated(
-            uint256(10050).mulDivDown(uint256(expectedMA), 1e8), // 100.5%
-            uint256(9500).mulDivDown(uint256(expectedMA), 1e8) // 95%
-        );
-
-        oracle.updatePrice();
-        currentMA = oracle.calculateMovingAverage();
-        assertEq(currentMA, expectedMA);
-
-        // 2. Test out of bounds (use fallback oracle)
-        console.log("second price", currentMA);
-        console.log(
-            "second upper and lower", oracle.allowedExchangeRateChangeUpper(), oracle.allowedExchangeRateChangeLower()
-        );
-
-        // Simulate a 12 hours time passage
-        vm.warp(block.timestamp + 12 hours);
-
-        IAccountant.AccountantState memory accountantState = accountant.accountantState();
-        accountantState.lastUpdateTimestamp = uint64(block.timestamp);
-        accountant.setState(accountantState);
-
-        primaryOracle.setRate(int256(uint256(currentMA).mulDivDown(10200, 1e4))); // +2%
-
-        (, price,,,) = fallbackOracle.latestRoundData();
-
-        expectedMA = (price * int256(multiplier) + currentMA * int256(10000 - multiplier)) / 10000;
-
-        vm.expectEmit(false, false, false, true);
-        emit FallbackPriceUsed(uint256(price), "price_out_of_bounds");
-        vm.expectEmit(false, false, false, true);
-        emit MovingAverageUpdated(uint256(currentMA), uint256(expectedMA));
-        vm.expectEmit(false, false, false, true);
-        emit BoundsUpdated(
-            uint256(10050).mulDivDown(uint256(expectedMA), 1e8), // 100.5%
-            uint256(9500).mulDivDown(uint256(expectedMA), 1e8) // 95%
-        );
-
-        oracle.updatePrice();
-        currentMA = oracle.calculateMovingAverage();
-        assertEq(currentMA, expectedMA);
-
-        // 3. Test fresh and within bounds again (use primary oracle)
-        console.log("third price", currentMA);
-        console.log(
-            "third upper and lower", oracle.allowedExchangeRateChangeUpper(), oracle.allowedExchangeRateChangeLower()
-        );
-
-        // Simulate a 12 hours time passage
-        vm.warp(block.timestamp + 12 hours);
-
-        accountantState = accountant.accountantState();
-        accountantState.lastUpdateTimestamp = uint64(block.timestamp);
-        accountant.setState(accountantState);
-
-        price = int256(uint256(currentMA).mulDivDown(10100, 1e4));
-        primaryOracle.setRate(price);
-
-        expectedMA = (price * int256(multiplier) + currentMA * int256(10000 - multiplier)) / 10000;
-
-        vm.expectEmit(false, false, false, true);
-        emit PrimaryPriceUsed(uint256(price));
-        vm.expectEmit(false, false, false, true);
-        emit MovingAverageUpdated(uint256(currentMA), uint256(expectedMA));
-        vm.expectEmit(false, false, false, true);
-        emit BoundsUpdated(
-            uint256(10050).mulDivDown(uint256(expectedMA), 1e8), // 100.5%
-            uint256(9500).mulDivDown(uint256(expectedMA), 1e8) // 95%
-        );
-
-        oracle.updatePrice();
-        currentMA = oracle.calculateMovingAverage();
-        assertEq(currentMA, expectedMA);
-
-        // 4. Test stale price (use fallback oracle)
-        console.log("fourth price", currentMA);
-        console.log(
-            "fourth upper and lower", oracle.allowedExchangeRateChangeUpper(), oracle.allowedExchangeRateChangeLower()
-        );
-
-        vm.warp(block.timestamp + 12 hours);
-
+        // set primary oracle price to 1.1e8
+        int256 newPrice = 1.1e8;
+        primaryOracle.setRate(newPrice);
+        // set accountant timestamp to 1 hour ago
         IAccountant.AccountantState memory state = accountant.accountantState();
-        state.lastUpdateTimestamp = uint64(block.timestamp);
+        state.lastUpdateTimestamp = uint64(block.timestamp - 1 hours);
         accountant.setState(state);
+        // set fallback oracle price to 1.2e8
+        int256 fallbackPrice = 1.2e8;
+        fallbackOracle.setRate(fallbackPrice);
 
-        // Simulate a 72 hours time passage
-        vm.warp(block.timestamp + 3 days);
+        int256 previousAnswer = oracle.latestAnswer();
+        int256 newPriceForEMA = newPrice; // primary price is used
+        int256 oldEMA = oracle.latestEMA();
+        uint256 multiplierValue = oracle.multiplier();
+        int256 expectedEMA =
+            (newPriceForEMA * int256(multiplierValue) + oldEMA * int256(10000 - multiplierValue)) / int256(10000);
 
-        (, price,,,) = fallbackOracle.latestRoundData();
-        expectedMA = (price * int256(multiplier) + currentMA * int256(10000 - multiplier)) / 10000;
+        uint256 expectedEMAUpperBound = uint256(expectedEMA).mulDivDown(10500, 1e4);
+        uint256 expectedEMALowerBound = uint256(expectedEMA).mulDivDown(9500, 1e4);
 
-        vm.expectEmit(false, false, false, true);
-        emit FallbackPriceUsed(uint256(price), "stale_price");
-        vm.expectEmit(false, false, false, true);
-        emit MovingAverageUpdated(uint256(currentMA), uint256(expectedMA));
-        vm.expectEmit(false, false, false, true);
-        emit BoundsUpdated(
-            uint256(10050).mulDivDown(uint256(expectedMA), 1e8), // 100.5%
-            uint256(9500).mulDivDown(uint256(expectedMA), 1e8) // 95%
-        );
+        // check event
+        vm.expectEmit(true, true, false, true);
+        emit NoPriceUpdate("primary_price_used_but_no_update", uint256(newPrice), uint256(fallbackPrice));
+        vm.expectEmit(true, true, false, true);
+        emit MovingAverageUpdated(uint256(oldEMA), uint256(expectedEMA));
+        vm.expectEmit(true, true, false, true);
+        emit BoundsUpdated(expectedEMAUpperBound, expectedEMALowerBound);
 
+        // update price
         oracle.updatePrice();
-        currentMA = oracle.calculateMovingAverage();
-        assertEq(currentMA, expectedMA);
+
+        // verify results
+        // latestAnswer
+        assertEq(oracle.latestAnswer(), previousAnswer);
+        // latestEMA
+        assertEq(oracle.latestEMA(), expectedEMA);
+        // EMAUpperBound
+        assertEq(oracle.EMAUpperBound(), expectedEMAUpperBound);
+        // EMALowerBound
+        assertEq(oracle.EMALowerBound(), expectedEMALowerBound);
+        // lastUpdateTimestamp
+        assertEq(oracle.lastUpdateTimestamp(), state.lastUpdateTimestamp);
+    }
+
+    function test_UpdatePrice_PrimaryOracleStaleAndInBoundsAndFallbackInBounds() public {
+        // second condition
+
+        // set primary oracle price to 1.001e8
+        int256 newPrice = 1.001e8;
+        primaryOracle.setRate(newPrice);
+        // set accountant timestamp to 5 days ago
+        IAccountant.AccountantState memory state = accountant.accountantState();
+        state.lastUpdateTimestamp = uint64(block.timestamp - 5 days);
+        accountant.setState(state);
+        // set fallback oracle price to 1.002e8
+        int256 fallbackPrice = 1.002e8;
+        fallbackOracle.setRate(fallbackPrice);
+
+        int256 newPriceForEMA = fallbackPrice; // fallback price is used
+        int256 oldEMA = oracle.latestEMA();
+        uint256 multiplierValue = oracle.multiplier();
+        int256 expectedEMA =
+            (newPriceForEMA * int256(multiplierValue) + oldEMA * int256(10000 - multiplierValue)) / int256(10000);
+
+        uint256 expectedEMAUpperBound = uint256(expectedEMA).mulDivDown(10500, 1e4);
+        uint256 expectedEMALowerBound = uint256(expectedEMA).mulDivDown(9500, 1e4);
+
+        // check event
+        vm.expectEmit(true, true, false, true);
+        emit FallbackPriceUsed(uint256(fallbackPrice), "price_out_of_bounds");
+        vm.expectEmit(true, true, false, true);
+        emit MovingAverageUpdated(uint256(oldEMA), uint256(expectedEMA));
+        vm.expectEmit(true, true, false, true);
+        emit BoundsUpdated(expectedEMAUpperBound, expectedEMALowerBound);
+
+        // update price
+        oracle.updatePrice();
+
+        // verify results
+        // latestAnswer
+        assertEq(oracle.latestAnswer(), fallbackPrice);
+        // latestEMA
+        assertEq(oracle.latestEMA(), expectedEMA);
+        // EMAUpperBound
+        assertEq(oracle.EMAUpperBound(), expectedEMAUpperBound);
+        // EMALowerBound
+        assertEq(oracle.EMALowerBound(), expectedEMALowerBound);
+        // lastUpdateTimestamp
+        assertEq(oracle.lastUpdateTimestamp(), state.lastUpdateTimestamp);
+    }
+
+    function test_UpdatePrice_PrimaryOracleStaleAndInBoundsAndFallbackOutOfBounds() public {
+        // 3-2 condition
+
+        // set primary oracle price to 1.001e8
+        int256 newPrice = 1.001e8;
+        primaryOracle.setRate(newPrice);
+        // set accountant timestamp to 5 days ago
+        IAccountant.AccountantState memory state = accountant.accountantState();
+        state.lastUpdateTimestamp = uint64(block.timestamp - 5 days);
+        accountant.setState(state);
+        // set fallback oracle price to 1.2e8
+        int256 fallbackPrice = 1.2e8;
+        fallbackOracle.setRate(fallbackPrice);
+
+        int256 previousAnswer = oracle.latestAnswer();
+        int256 newPriceForEMA = fallbackPrice; // fallback price is used
+        int256 oldEMA = oracle.latestEMA();
+        uint256 multiplierValue = oracle.multiplier();
+        int256 expectedEMA =
+            (newPriceForEMA * int256(multiplierValue) + oldEMA * int256(10000 - multiplierValue)) / int256(10000);
+
+        uint256 expectedEMAUpperBound = uint256(expectedEMA).mulDivDown(10500, 1e4);
+        uint256 expectedEMALowerBound = uint256(expectedEMA).mulDivDown(9500, 1e4);
+
+        // check event
+        vm.expectEmit(true, true, false, true);
+        emit NoPriceUpdate("fallback_price_used_but_no_update", uint256(newPrice), uint256(fallbackPrice));
+        vm.expectEmit(true, true, false, true);
+        emit MovingAverageUpdated(uint256(oldEMA), uint256(expectedEMA));
+        vm.expectEmit(true, true, false, true);
+        emit BoundsUpdated(expectedEMAUpperBound, expectedEMALowerBound);
+
+        // update price
+        oracle.updatePrice();
+
+        // verify results
+        // latestAnswer
+        assertEq(oracle.latestAnswer(), previousAnswer);
+        // latestEMA
+        assertEq(oracle.latestEMA(), expectedEMA);
+        // EMAUpperBound
+        assertEq(oracle.EMAUpperBound(), expectedEMAUpperBound);
+        // EMALowerBound
+        assertEq(oracle.EMALowerBound(), expectedEMALowerBound);
+        // lastUpdateTimestamp
+        assertEq(oracle.lastUpdateTimestamp(), state.lastUpdateTimestamp);
+    }
+
+    function test_UpdatePrice_PrimaryOracleStaleAndOutOfBoundsAndFallbackInBounds() public {
+        // second condition
+
+        // set primary oracle price to 1.1e8
+        int256 newPrice = 1.1e8;
+        primaryOracle.setRate(newPrice);
+        // set accountant timestamp to 5 days ago
+        IAccountant.AccountantState memory state = accountant.accountantState();
+        state.lastUpdateTimestamp = uint64(block.timestamp - 5 days);
+        accountant.setState(state);
+        // set fallback oracle price to 1.002e8
+        int256 fallbackPrice = 1.002e8;
+        fallbackOracle.setRate(fallbackPrice);
+
+        int256 newPriceForEMA = fallbackPrice; // fallback price is used
+        int256 oldEMA = oracle.latestEMA();
+        uint256 multiplierValue = oracle.multiplier();
+        int256 expectedEMA =
+            (newPriceForEMA * int256(multiplierValue) + oldEMA * int256(10000 - multiplierValue)) / int256(10000);
+
+        uint256 expectedEMAUpperBound = uint256(expectedEMA).mulDivDown(10500, 1e4);
+        uint256 expectedEMALowerBound = uint256(expectedEMA).mulDivDown(9500, 1e4);
+
+        // check event
+        vm.expectEmit(true, true, false, true);
+        emit FallbackPriceUsed(uint256(fallbackPrice), "price_out_of_bounds");
+        vm.expectEmit(true, true, false, true);
+        emit MovingAverageUpdated(uint256(oldEMA), uint256(expectedEMA));
+        vm.expectEmit(true, true, false, true);
+        emit BoundsUpdated(expectedEMAUpperBound, expectedEMALowerBound);
+
+        // update price
+        oracle.updatePrice();
+
+        // verify results
+        // latestAnswer
+        assertEq(oracle.latestAnswer(), fallbackPrice);
+        // latestEMA
+        assertEq(oracle.latestEMA(), expectedEMA);
+        // EMAUpperBound
+        assertEq(oracle.EMAUpperBound(), expectedEMAUpperBound);
+        // EMALowerBound
+        assertEq(oracle.EMALowerBound(), expectedEMALowerBound);
+        // lastUpdateTimestamp
+        assertEq(oracle.lastUpdateTimestamp(), state.lastUpdateTimestamp);
+    }
+
+    function test_UpdatePrice_PrimaryOracleStaleAndOutOfBoundsAndFallbackOutOfBounds() public {
+        // 3-2 condition
+
+        // set primary oracle price to 1.1e8
+        int256 newPrice = 1.1e8;
+        primaryOracle.setRate(newPrice);
+        // set accountant timestamp to 5 days ago
+        IAccountant.AccountantState memory state = accountant.accountantState();
+        state.lastUpdateTimestamp = uint64(block.timestamp - 5 days);
+        accountant.setState(state);
+        // set fallback oracle price to 1.2e8
+        int256 fallbackPrice = 1.2e8;
+        fallbackOracle.setRate(fallbackPrice);
+
+        int256 previousAnswer = oracle.latestAnswer();
+        int256 newPriceForEMA = fallbackPrice; // fallback price is used
+        int256 oldEMA = oracle.latestEMA();
+        uint256 multiplierValue = oracle.multiplier();
+        int256 expectedEMA =
+            (newPriceForEMA * int256(multiplierValue) + oldEMA * int256(10000 - multiplierValue)) / int256(10000);
+
+        uint256 expectedEMAUpperBound = uint256(expectedEMA).mulDivDown(10500, 1e4);
+        uint256 expectedEMALowerBound = uint256(expectedEMA).mulDivDown(9500, 1e4);
+
+        // check event
+        vm.expectEmit(true, true, false, true);
+        emit NoPriceUpdate("fallback_price_used_but_no_update", uint256(newPrice), uint256(fallbackPrice));
+        vm.expectEmit(true, true, false, true);
+        emit MovingAverageUpdated(uint256(oldEMA), uint256(expectedEMA));
+        vm.expectEmit(true, true, false, true);
+        emit BoundsUpdated(expectedEMAUpperBound, expectedEMALowerBound);
+
+        // update price
+        oracle.updatePrice();
+
+        // verify results
+        // latestAnswer
+        assertEq(oracle.latestAnswer(), previousAnswer);
+        // latestEMA
+        assertEq(oracle.latestEMA(), expectedEMA);
+        // EMAUpperBound
+        assertEq(oracle.EMAUpperBound(), expectedEMAUpperBound);
+        // EMALowerBound
+        assertEq(oracle.EMALowerBound(), expectedEMALowerBound);
+        // lastUpdateTimestamp
+        assertEq(oracle.lastUpdateTimestamp(), state.lastUpdateTimestamp);
     }
 
     function test_AdminFunctions() public {
@@ -477,6 +584,9 @@ contract sSuperUSDMorphoOracleTest is Test {
         oracle.updateFallbackOracle(address(0x1));
 
         vm.expectRevert(sSuperUSDMorphoOracle.NotOwner.selector);
+        oracle.updateBaseBounds(10100, 9000); // Add test for updateBaseBounds
+
+        vm.expectRevert(sSuperUSDMorphoOracle.NotOwner.selector);
         oracle.transferOwnership(address(0x1));
 
         vm.stopPrank();
@@ -485,15 +595,5 @@ contract sSuperUSDMorphoOracleTest is Test {
     function test_ViewFunctions() public {
         // Test getPrecision
         assertEq(oracle.getPrecision(), 36 + 6 - 18); // 36 + loanDecimals - collateralDecimals
-
-        // Test getCollateralInfo
-        (address token, uint8 decimals) = oracle.getCollateralInfo();
-        assertEq(token, address(collateralToken));
-        assertEq(decimals, 18);
-
-        // Test getLoanInfo
-        (token, decimals) = oracle.getLoanInfo();
-        assertEq(token, address(loanToken));
-        assertEq(decimals, 6);
     }
 }
