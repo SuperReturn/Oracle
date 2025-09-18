@@ -200,15 +200,15 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
         if (isPrimaryFresh && !isPrimaryPriceOutOfRange) {
             //    update global price with price
             latestAnswer = primaryOraclePrice;
+            //    update EMA with global price
             newPriceForEMA = latestAnswer;
             emit PrimaryPriceUsed(uint256(latestAnswer));
-            //    update EMA with global price
         } else if (!isFallbackPriceOutOfRange) {
             //     update global price with fallback price
             latestAnswer = fallbackOraclePrice;
+            //     update EMA with global price
             newPriceForEMA = latestAnswer;
             emit FallbackPriceUsed(uint256(latestAnswer), "price_out_of_bounds");
-            //     update EMA with global price
         } else {
             // no global price update
             string memory reason;
