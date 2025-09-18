@@ -51,11 +51,11 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
     /// @notice The base lower bound for calculating exchange rate limits (scaled by 1e4)
     uint256 public baseLowerBound = 9500; // 95% default
 
-    /// @notice The upper bound multiplier for price changes (scaled by 1e4)
-    uint256 public allowedExchangeRateChangeUpper = 10050; // 100.5% default
+    /// @notice The EMA upper bound, same decimals as latestAnswer
+    uint256 public EMAUpperBound;
 
-    /// @notice The lower bound multiplier for price changes (scaled by 1e4)
-    uint256 public allowedExchangeRateChangeLower = 9500; // 95% default
+    /// @notice The EMA lower bound, same decimals as latestAnswer
+    uint256 public EMALowerBound;
 
     /// @notice The multiplier for EMA calculation (scaled by 1e4)
     /// @dev Calculated as: 2/(N+1) where N=10 (days)
@@ -147,6 +147,10 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
             IsSuperUSDOracle(_sSuperUSDOracleAddress).latestRoundData();
         latestEMA = initialPrice;
         latestAnswer = initialPrice;
+
+        // Convert latestEMA to uint256 for bounds calculation
+        EMAUpperBound = uint256(latestEMA).mulDivDown(baseUpperBound, 1e4);
+        EMALowerBound = uint256(latestEMA).mulDivDown(baseLowerBound, 1e4);
     }
 
     /**
@@ -182,18 +186,13 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
         // bound check
         ( /* roundId */ , primaryOraclePrice, /* startedAt */, /* updatedAt */, /* answeredInRound */ ) =
             IsSuperUSDOracle(sSuperUSDOracleAddress).latestRoundData();
-        if (
-            uint256(primaryOraclePrice) > uint256(latestAnswer).mulDivDown(allowedExchangeRateChangeUpper, 1e4)
-                || uint256(primaryOraclePrice) < uint256(latestAnswer).mulDivDown(allowedExchangeRateChangeLower, 1e4)
-        ) {
+        if (uint256(primaryOraclePrice) > EMAUpperBound || uint256(primaryOraclePrice) < EMALowerBound) {
             isPrimaryPriceOutOfRange = true;
         }
+
         ( /* roundId */ , fallbackOraclePrice, /* startedAt */, /* updatedAt */, /* answeredInRound */ ) =
             IsSuperUSDOracle(sSuperUSDFallbackOracleAddress).latestRoundData();
-        if (
-            uint256(fallbackOraclePrice) > uint256(latestAnswer).mulDivDown(allowedExchangeRateChangeUpper, 1e4)
-                || uint256(fallbackOraclePrice) < uint256(latestAnswer).mulDivDown(allowedExchangeRateChangeLower, 1e4)
-        ) {
+        if (uint256(fallbackOraclePrice) > EMAUpperBound || uint256(fallbackOraclePrice) < EMALowerBound) {
             isFallbackPriceOutOfRange = true;
         }
 
@@ -233,12 +232,12 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
             (newPriceForEMA * int256(multiplierValue) + oldEMA * int256(10000 - multiplierValue)) / int256(10000);
 
         // Update bounds based on new EMA
-        allowedExchangeRateChangeUpper = uint256(baseUpperBound).mulDivDown(uint256(latestEMA), 1e8);
-        allowedExchangeRateChangeLower = uint256(baseLowerBound).mulDivDown(uint256(latestEMA), 1e8);
+        EMAUpperBound = uint256(latestEMA).mulDivDown(baseUpperBound, 1e4);
+        EMALowerBound = uint256(latestEMA).mulDivDown(baseLowerBound, 1e4);
 
         // Emit events
         emit MovingAverageUpdated(uint256(oldEMA), uint256(latestEMA));
-        emit BoundsUpdated(allowedExchangeRateChangeUpper, allowedExchangeRateChangeLower);
+        emit BoundsUpdated(EMAUpperBound, EMALowerBound);
 
         // Update lastUpdateTimestamp
         lastUpdateTimestamp = state.lastUpdateTimestamp;
