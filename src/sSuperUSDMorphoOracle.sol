@@ -180,8 +180,10 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
         }
 
         bool isPrimaryFresh = false;
+        bool isFallbackFresh = false;
         bool isPrimaryPriceOutOfRange = false;
         bool isFallbackPriceOutOfRange = false;
+        uint256 lastUpdateTimestampFallback;
         int256 primaryOraclePrice;
         int256 fallbackOraclePrice;
         int256 newPriceForEMA;
@@ -191,7 +193,11 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
         if (block.timestamp - state.lastUpdateTimestamp <= maxPriceAge) {
             isPrimaryFresh = true;
         }
-        // Fallback oracle always fresh
+        ( /* roundId */ , fallbackOraclePrice, /* startedAt */, lastUpdateTimestampFallback, /* answeredInRound */ ) =
+            IsSuperUSDOracle(sSuperUSDFallbackOracleAddress).latestRoundData();
+        if (block.timestamp - lastUpdateTimestampFallback <= maxPriceAge) {
+            isFallbackFresh = true;
+        }
 
         // bound check
         ( /* roundId */ , primaryOraclePrice, /* startedAt */, /* updatedAt */, /* answeredInRound */ ) =
@@ -200,8 +206,6 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
             isPrimaryPriceOutOfRange = true;
         }
 
-        ( /* roundId */ , fallbackOraclePrice, /* startedAt */, /* updatedAt */, /* answeredInRound */ ) =
-            IsSuperUSDOracle(sSuperUSDFallbackOracleAddress).latestRoundData();
         if (uint256(fallbackOraclePrice) > EMAUpperBound || uint256(fallbackOraclePrice) < EMALowerBound) {
             isFallbackPriceOutOfRange = true;
         }
@@ -212,7 +216,7 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
             //    update EMA with global price
             newPriceForEMA = latestAnswer;
             emit PrimaryPriceUsed(uint256(latestAnswer));
-        } else if (!isFallbackPriceOutOfRange) {
+        } else if (isFallbackFresh && !isFallbackPriceOutOfRange) {
             //     update global price with fallback price
             latestAnswer = fallbackOraclePrice;
             //     update EMA with global price
@@ -225,10 +229,14 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
                 // update EMA with primary
                 newPriceForEMA = primaryOraclePrice;
                 reason = "primary_price_used_but_no_update";
-            } else {
+            } else if (isFallbackFresh) {
                 // update EMA with fallback
                 newPriceForEMA = fallbackOraclePrice;
                 reason = "fallback_price_used_but_no_update";
+            } else {
+                reason = "both_price_are_not_fresh";
+                emit NoPriceUpdate(reason, uint256(primaryOraclePrice), uint256(fallbackOraclePrice));
+                return;
             }
             emit NoPriceUpdate(reason, uint256(primaryOraclePrice), uint256(fallbackOraclePrice));
         }
@@ -286,6 +294,12 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
     /// @param _newOracle The new oracle address
     function updateFallbackOracle(address _newOracle) external onlyOwner {
         if (_newOracle == address(0)) revert AddressZero();
+
+        // Get latest price from new oracle to validate it's not zero
+        ( /* roundId */ , int256 newPrice, /* startedAt */, /* updatedAt */, /* answeredInRound */ ) =
+            IsSuperUSDOracle(_newOracle).latestRoundData();
+        if (newPrice == 0) revert("Zero price not allowed");
+
         address oldOracle = sSuperUSDFallbackOracleAddress;
         sSuperUSDFallbackOracleAddress = _newOracle;
         emit FallbackOracleUpdated(oldOracle, _newOracle);

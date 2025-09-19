@@ -568,11 +568,11 @@ contract sSuperUSDMorphoOracleTest is Test {
         assertEq(oracle.sSuperUSDOracleAddress(), address(newPrimaryOracle));
 
         // Test updateFallbackOracle
-        address newFallbackOracle = makeAddr("newFallbackOracle");
+        MockOracle newFallbackOracle = new MockOracle(address(accountant), 1e8);
         vm.expectEmit(true, true, false, true);
-        emit FallbackOracleUpdated(address(fallbackOracle), newFallbackOracle);
-        oracle.updateFallbackOracle(newFallbackOracle);
-        assertEq(oracle.sSuperUSDFallbackOracleAddress(), newFallbackOracle);
+        emit FallbackOracleUpdated(address(fallbackOracle), address(newFallbackOracle));
+        oracle.updateFallbackOracle(address(newFallbackOracle));
+        assertEq(oracle.sSuperUSDFallbackOracleAddress(), address(newFallbackOracle));
 
         // Test transferOwnership
         address newOwner = makeAddr("newOwner");
