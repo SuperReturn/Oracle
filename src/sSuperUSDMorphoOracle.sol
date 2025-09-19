@@ -245,9 +245,8 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
         // EMA = α * currentPrice + (1 - α) * previousEMA
         // where α is the multiplier = 2/(N+1), N=10 days
         // 2/(10+1) ≈ 0.2 = 20% = 2000 (scaled by 1e4)
-        uint256 multiplierValue = uint256(multiplier);
         latestEMA =
-            (newPriceForEMA * int256(multiplierValue) + oldEMA * int256(10000 - multiplierValue)) / int256(10000);
+            (newPriceForEMA * int256(multiplier) + oldEMA * int256(10000 - multiplier)) / int256(10000);
 
         // Update bounds based on new EMA
         EMAUpperBound = uint256(latestEMA).mulDivDown(baseUpperBound, 1e4);
