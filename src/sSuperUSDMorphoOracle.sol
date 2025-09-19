@@ -71,6 +71,9 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
     /// @notice The timestamp of the last price update
     uint256 public lastUpdateTimestamp;
 
+    /// @notice Mapping of addresses that are allowed to execute updatePrice
+    mapping(address => bool) public executors;
+
     /**
      *
      * EVENTS
@@ -87,6 +90,7 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
     event FallbackPriceUsed(uint256 price, string reason);
     event BaseBoundsUpdated(uint256 oldUpperBound, uint256 oldLowerBound, uint256 newUpperBound, uint256 newLowerBound);
     event NoPriceUpdate(string reason, uint256 primaryPrice, uint256 fallbackPrice);
+    event ExecutorUpdated(address indexed executor, bool isExecutor);
 
     /**
      *
@@ -97,6 +101,7 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
     error NotOwner();
     error InvalidBounds();
     error InvalidMultiplier();
+    error NotExecutor();
 
     /**
      *
@@ -105,6 +110,11 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
      */
     modifier onlyOwner() {
         if (msg.sender != owner) revert NotOwner();
+        _;
+    }
+
+    modifier onlyExecutor() {
+        if (!executors[msg.sender]) revert NotExecutor();
         _;
     }
 
@@ -160,7 +170,7 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
      */
 
     /// @notice Computes and updates the exchange rate using EMA
-    function updatePrice() public {
+    function updatePrice() public nonReentrant onlyExecutor {
         address primaryAccountant = IsSuperUSDOracle(sSuperUSDOracleAddress).sSuperUSDAccountant();
         IAccountant.AccountantState memory state = IAccountant(primaryAccountant).accountantState();
 
@@ -327,6 +337,15 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
         baseLowerBound = _newLowerBound;
 
         emit BaseBoundsUpdated(oldUpper, oldLower, _newUpperBound, _newLowerBound);
+    }
+
+    /// @notice Updates the executor status of an address
+    /// @param _executor The address to update
+    /// @param _isExecutor Whether the address should be an executor
+    function updateExecutor(address _executor, bool _isExecutor) external onlyOwner {
+        if (_executor == address(0)) revert AddressZero();
+        executors[_executor] = _isExecutor;
+        emit ExecutorUpdated(_executor, _isExecutor);
     }
 
     /**

@@ -104,6 +104,7 @@ contract sSuperUSDMorphoOracleTest is Test {
 
     sSuperUSDMorphoOracle public oracle;
     address public owner;
+    address public executor; // Add executor
     MockToken public collateralToken;
     MockToken public loanToken;
     MockOracle public primaryOracle;
@@ -147,6 +148,10 @@ contract sSuperUSDMorphoOracleTest is Test {
 
         // Set initial state
         owner = address(this);
+
+        // Setup executor
+        executor = makeAddr("executor");
+        oracle.updateExecutor(executor, true);
     }
 
     function test_Constructor() public {
@@ -239,7 +244,8 @@ contract sSuperUSDMorphoOracleTest is Test {
         vm.expectEmit(true, true, false, true);
         emit BoundsUpdated(expectedEMAUpperBound, expectedEMALowerBound);
 
-        // update price
+        // update price with executor
+        vm.prank(executor);
         oracle.updatePrice();
 
         // verify results
@@ -286,7 +292,8 @@ contract sSuperUSDMorphoOracleTest is Test {
         vm.expectEmit(true, true, false, true);
         emit BoundsUpdated(expectedEMAUpperBound, expectedEMALowerBound);
 
-        // update price
+        // update price with executor
+        vm.prank(executor);
         oracle.updatePrice();
 
         // verify results
@@ -334,7 +341,8 @@ contract sSuperUSDMorphoOracleTest is Test {
         vm.expectEmit(true, true, false, true);
         emit BoundsUpdated(expectedEMAUpperBound, expectedEMALowerBound);
 
-        // update price
+        // update price with executor
+        vm.prank(executor);
         oracle.updatePrice();
 
         // verify results
@@ -381,7 +389,8 @@ contract sSuperUSDMorphoOracleTest is Test {
         vm.expectEmit(true, true, false, true);
         emit BoundsUpdated(expectedEMAUpperBound, expectedEMALowerBound);
 
-        // update price
+        // update price with executor
+        vm.prank(executor);
         oracle.updatePrice();
 
         // verify results
@@ -429,7 +438,8 @@ contract sSuperUSDMorphoOracleTest is Test {
         vm.expectEmit(true, true, false, true);
         emit BoundsUpdated(expectedEMAUpperBound, expectedEMALowerBound);
 
-        // update price
+        // update price with executor
+        vm.prank(executor);
         oracle.updatePrice();
 
         // verify results
@@ -476,7 +486,8 @@ contract sSuperUSDMorphoOracleTest is Test {
         vm.expectEmit(true, true, false, true);
         emit BoundsUpdated(expectedEMAUpperBound, expectedEMALowerBound);
 
-        // update price
+        // update price with executor
+        vm.prank(executor);
         oracle.updatePrice();
 
         // verify results
@@ -524,7 +535,8 @@ contract sSuperUSDMorphoOracleTest is Test {
         vm.expectEmit(true, true, false, true);
         emit BoundsUpdated(expectedEMAUpperBound, expectedEMALowerBound);
 
-        // update price
+        // update price with executor
+        vm.prank(executor);
         oracle.updatePrice();
 
         // verify results
@@ -595,5 +607,32 @@ contract sSuperUSDMorphoOracleTest is Test {
     function test_ViewFunctions() public {
         // Test getPrecision
         assertEq(oracle.getPrecision(), 36 + 6 - 18); // 36 + loanDecimals - collateralDecimals
+    }
+
+    // Test executor functionality
+    function test_UpdateExecutor() public {
+        address newExecutor = makeAddr("newExecutor");
+
+        // Non-owner cannot add executor
+        vm.prank(makeAddr("nonOwner"));
+        vm.expectRevert(sSuperUSDMorphoOracle.NotOwner.selector);
+        oracle.updateExecutor(newExecutor, true);
+
+        // Owner can add executor
+        oracle.updateExecutor(newExecutor, true);
+        assertTrue(oracle.executors(newExecutor));
+
+        // Owner can remove executor
+        oracle.updateExecutor(newExecutor, false);
+        assertFalse(oracle.executors(newExecutor));
+
+        // Non-executor cannot call updatePrice
+        vm.prank(makeAddr("nonExecutor"));
+        vm.expectRevert(sSuperUSDMorphoOracle.NotExecutor.selector);
+        oracle.updatePrice();
+
+        // Executor can call updatePrice
+        vm.prank(executor);
+        oracle.updatePrice();
     }
 }
