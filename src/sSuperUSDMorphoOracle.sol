@@ -380,7 +380,6 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
      * @param _newDelay The new minimum delay in seconds
      */
     function updateMinEMADelay(uint256 _newDelay) external onlyOwner {
-        if (_newDelay == 0) revert("Zero delay not allowed");
         uint256 oldDelay = minEMADelay;
         minEMADelay = _newDelay;
         emit MinEMADelayUpdated(oldDelay, _newDelay);
