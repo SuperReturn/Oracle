@@ -169,6 +169,8 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
         latestEMA = initialPrice;
         latestAnswer = initialPrice;
 
+        lastEMATime = 0;
+
         // Convert latestEMA to uint256 for bounds calculation
         EMAUpperBound = uint256(latestEMA).mulDivDown(baseUpperBound, 1e4);
         EMALowerBound = uint256(latestEMA).mulDivDown(baseLowerBound, 1e4);
