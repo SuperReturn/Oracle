@@ -164,7 +164,6 @@ contract sSuperUSDMorphoOracleTest is Test {
         assertEq(oracle.loanDecimals(), 6);
         assertEq(oracle.latestEMA(), 1e8);
         assertEq(oracle.latestAnswer(), 1e8);
-        assertEq(oracle.lastUpdateTimestamp(), 0);
         assertEq(oracle.maxPriceAge(), 48 hours);
         assertEq(oracle.baseUpperBound(), 10500);
         assertEq(oracle.baseLowerBound(), 9500);
@@ -257,8 +256,6 @@ contract sSuperUSDMorphoOracleTest is Test {
         assertEq(oracle.EMAUpperBound(), expectedEMAUpperBound);
         // EMALowerBound
         assertEq(oracle.EMALowerBound(), expectedEMALowerBound);
-        // lastUpdateTimestamp
-        assertEq(oracle.lastUpdateTimestamp(), state.lastUpdateTimestamp);
     }
 
     function test_UpdatePrice_PrimaryOracleFreshAndOutOfBoundsAndFallbackInBounds() public {
@@ -305,8 +302,6 @@ contract sSuperUSDMorphoOracleTest is Test {
         assertEq(oracle.EMAUpperBound(), expectedEMAUpperBound);
         // EMALowerBound
         assertEq(oracle.EMALowerBound(), expectedEMALowerBound);
-        // lastUpdateTimestamp
-        assertEq(oracle.lastUpdateTimestamp(), state.lastUpdateTimestamp);
     }
 
     function test_UpdatePrice_PrimaryOracleFreshAndOutOfBoundsAndFallbackOutOfBounds() public {
@@ -354,8 +349,6 @@ contract sSuperUSDMorphoOracleTest is Test {
         assertEq(oracle.EMAUpperBound(), expectedEMAUpperBound);
         // EMALowerBound
         assertEq(oracle.EMALowerBound(), expectedEMALowerBound);
-        // lastUpdateTimestamp
-        assertEq(oracle.lastUpdateTimestamp(), state.lastUpdateTimestamp);
     }
 
     function test_UpdatePrice_PrimaryOracleStaleAndInBoundsAndFallbackInBounds() public {
@@ -402,8 +395,6 @@ contract sSuperUSDMorphoOracleTest is Test {
         assertEq(oracle.EMAUpperBound(), expectedEMAUpperBound);
         // EMALowerBound
         assertEq(oracle.EMALowerBound(), expectedEMALowerBound);
-        // lastUpdateTimestamp
-        assertEq(oracle.lastUpdateTimestamp(), state.lastUpdateTimestamp);
     }
 
     function test_UpdatePrice_PrimaryOracleStaleAndInBoundsAndFallbackOutOfBounds() public {
@@ -451,8 +442,6 @@ contract sSuperUSDMorphoOracleTest is Test {
         assertEq(oracle.EMAUpperBound(), expectedEMAUpperBound);
         // EMALowerBound
         assertEq(oracle.EMALowerBound(), expectedEMALowerBound);
-        // lastUpdateTimestamp
-        assertEq(oracle.lastUpdateTimestamp(), state.lastUpdateTimestamp);
     }
 
     function test_UpdatePrice_PrimaryOracleStaleAndOutOfBoundsAndFallbackInBounds() public {
@@ -499,8 +488,6 @@ contract sSuperUSDMorphoOracleTest is Test {
         assertEq(oracle.EMAUpperBound(), expectedEMAUpperBound);
         // EMALowerBound
         assertEq(oracle.EMALowerBound(), expectedEMALowerBound);
-        // lastUpdateTimestamp
-        assertEq(oracle.lastUpdateTimestamp(), state.lastUpdateTimestamp);
     }
 
     function test_UpdatePrice_PrimaryOracleStaleAndOutOfBoundsAndFallbackOutOfBounds() public {
@@ -548,8 +535,6 @@ contract sSuperUSDMorphoOracleTest is Test {
         assertEq(oracle.EMAUpperBound(), expectedEMAUpperBound);
         // EMALowerBound
         assertEq(oracle.EMALowerBound(), expectedEMALowerBound);
-        // lastUpdateTimestamp
-        assertEq(oracle.lastUpdateTimestamp(), state.lastUpdateTimestamp);
     }
 
     function test_AdminFunctions() public {
