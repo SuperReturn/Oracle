@@ -4,6 +4,8 @@ pragma solidity ^0.8.21;
 interface IAccountant {
     function getRate() external view returns (uint256);
 
+    function getRateSafe() external view returns (uint256);
+
     struct AccountantState {
         address payoutAddress;
         uint96 highwaterMark;

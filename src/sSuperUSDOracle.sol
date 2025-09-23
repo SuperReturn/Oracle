@@ -36,7 +36,8 @@ contract sSuperUSDOracle is IsSuperUSDOracle {
         view
         returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)
     {
-        uint256 rate = IAccountant(sSuperUSDAccountant).getRate();
+        // revert if accountant is paused
+        uint256 rate = IAccountant(sSuperUSDAccountant).getRateSafe();
         uint256 timestamp = IAccountant(sSuperUSDAccountant).accountantState().lastUpdateTimestamp;
 
         // Convert from 6 decimals to 8 decimals
