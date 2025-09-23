@@ -199,46 +199,24 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
         bool isFallbackFresh = false;
         bool isPrimaryPriceOutOfRange = false;
         bool isFallbackPriceOutOfRange = false;
-        bool isPrimaryRevert = false;
-        bool isFallbackRevert = false;
-        int256 primaryOraclePrice;
-        int256 fallbackOraclePrice;
         int256 newPriceForEMA;
         int256 oldEMA = latestEMA;
         uint256 newEMATime;
 
-        // primary revert check
+        // primary oracle check
         try IsSuperUSDOracle(sSuperUSDOracleAddress).latestRoundData() {
-            isPrimaryRevert = false;
+            ( /* roundId */ , latestPrimaryPrice, /* startedAt */, latestPrimaryTime, /* answeredInRound */ ) =
+                IsSuperUSDOracle(sSuperUSDOracleAddress).latestRoundData();
         } catch {
-            isPrimaryRevert = true;
             emit PrimaryOracleReverted();
         }
 
-        // fallback revert check
+        // fallback oracle check
         try IsSuperUSDOracle(sSuperUSDFallbackOracleAddress).latestRoundData() {
-            isFallbackRevert = false;
-        } catch {
-            isFallbackRevert = true;
-            emit FallbackOracleReverted();
-        }
-
-        if (isPrimaryRevert) {
-            primaryOraclePrice = latestPrimaryPrice;
-            // latestPrimaryPrice and latestPrimaryTime don't need to update
-        } else {
-            ( /* roundId */ , latestPrimaryPrice, /* startedAt */, latestPrimaryTime, /* answeredInRound */ ) =
-                IsSuperUSDOracle(sSuperUSDOracleAddress).latestRoundData();
-            primaryOraclePrice = latestPrimaryPrice;
-        }
-
-        if (isFallbackRevert) {
-            fallbackOraclePrice = latestFallbackPrice;
-            // latestFallbackPrice and latestFallbackTime don't need to update
-        } else {
             ( /* roundId */ , latestFallbackPrice, /* startedAt */, latestFallbackTime, /* answeredInRound */ ) =
                 IsSuperUSDOracle(sSuperUSDFallbackOracleAddress).latestRoundData();
-            fallbackOraclePrice = latestFallbackPrice;
+        } catch {
+            emit FallbackOracleReverted();
         }
 
         // Fresh check
@@ -251,40 +229,40 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
         }
 
         // bound check
-        if (uint256(primaryOraclePrice) > EMAUpperBound || uint256(primaryOraclePrice) < EMALowerBound) {
+        if (uint256(latestPrimaryPrice) > EMAUpperBound || uint256(latestPrimaryPrice) < EMALowerBound) {
             isPrimaryPriceOutOfRange = true;
         }
 
-        if (uint256(fallbackOraclePrice) > EMAUpperBound || uint256(fallbackOraclePrice) < EMALowerBound) {
+        if (uint256(latestFallbackPrice) > EMAUpperBound || uint256(latestFallbackPrice) < EMALowerBound) {
             isFallbackPriceOutOfRange = true;
         }
 
         if (isPrimaryFresh && !isPrimaryPriceOutOfRange) {
-            latestAnswer = primaryOraclePrice;
+            latestAnswer = latestPrimaryPrice;
             newPriceForEMA = latestAnswer;
             newEMATime = latestPrimaryTime;
             emit PrimaryPriceUsed(uint256(latestAnswer));
         } else if (isFallbackFresh && !isFallbackPriceOutOfRange) {
-            latestAnswer = fallbackOraclePrice;
+            latestAnswer = latestFallbackPrice;
             newPriceForEMA = latestAnswer;
             newEMATime = latestFallbackTime;
             emit FallbackPriceUsed(uint256(latestAnswer), "price_out_of_bounds");
         } else {
             string memory reason;
             if (isPrimaryFresh) {
-                newPriceForEMA = primaryOraclePrice;
+                newPriceForEMA = latestPrimaryPrice;
                 newEMATime = latestPrimaryTime;
                 reason = "primary_price_used_but_no_update";
             } else if (isFallbackFresh) {
-                newPriceForEMA = fallbackOraclePrice;
+                newPriceForEMA = latestFallbackPrice;
                 newEMATime = latestFallbackTime;
                 reason = "fallback_price_used_but_no_update";
             } else {
                 reason = "both_price_are_not_fresh";
-                emit NoPriceUpdate(reason, uint256(primaryOraclePrice), uint256(fallbackOraclePrice));
+                emit NoPriceUpdate(reason, uint256(latestPrimaryPrice), uint256(latestFallbackPrice));
                 return;
             }
-            emit NoPriceUpdate(reason, uint256(primaryOraclePrice), uint256(fallbackOraclePrice));
+            emit NoPriceUpdate(reason, uint256(latestPrimaryPrice), uint256(latestFallbackPrice));
         }
 
         // Only update EMA if enough time has passed since latest update
