@@ -204,18 +204,30 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
         uint256 newEMATime;
 
         // primary oracle check
-        try IsSuperUSDOracle(sSuperUSDOracleAddress).latestRoundData() {
-            ( /* roundId */ , latestPrimaryPrice, /* startedAt */, latestPrimaryTime, /* answeredInRound */ ) =
-                IsSuperUSDOracle(sSuperUSDOracleAddress).latestRoundData();
+        try IsSuperUSDOracle(sSuperUSDOracleAddress).latestRoundData() returns (
+            uint80 /* roundId */,
+            int256 price,
+            uint256 /* startedAt */,
+            uint256 timestamp,
+            uint80 /* answeredInRound */
+        ) {
+            latestPrimaryPrice = price;
+            latestPrimaryTime = timestamp;
         } catch {
             emit PrimaryOracleReverted();
         }
 
         // fallback oracle check
-        try IsSuperUSDOracle(sSuperUSDFallbackOracleAddress).latestRoundData() {
-            ( /* roundId */ , latestFallbackPrice, /* startedAt */, latestFallbackTime, /* answeredInRound */ ) =
-                IsSuperUSDOracle(sSuperUSDFallbackOracleAddress).latestRoundData();
-        } catch {
+         try IsSuperUSDOracle(sSuperUSDFallbackOracleAddress).latestRoundData() returns (
+            uint80 /* roundId */,
+            int256 price,
+            uint256 /* startedAt */,
+            uint256 timestamp,
+            uint80 /* answeredInRound */
+        ) {
+            latestFallbackPrice = price;
+            latestFallbackTime = timestamp;
+        }catch {
             emit FallbackOracleReverted();
         }
 
