@@ -87,12 +87,19 @@ contract sSuperUSDFallbackOracle {
 
         // read observations from pool
         (int56[] memory tickCumulatives, ) = IUniswapV3PoolMinimal(uniV3Pool).observe(secondsAgos);
-        
+
+        // calculate the difference in tickCumulatives
+        int56 tickCumulativesDiff;
+        // overflow of tickCumulative is desired per uni v3
+        unchecked {
+            tickCumulativesDiff = tickCumulatives[1] - tickCumulatives[0];
+        }
+
+        // calculate average tick over interval
+        int24 averageTick = toInt24(tickCumulativesDiff / int56(uint56(twapInterval)));
+
         // convert tick to sqrt price
-        uint160 sqrtPriceX96 = TickMath.getSqrtRatioAtTick(
-            // calculate average tick over interval
-            toInt24((tickCumulatives[1] - tickCumulatives[0]) / int56(uint56(twapInterval)))
-        );
+        uint160 sqrtPriceX96 = TickMath.getSqrtRatioAtTick(averageTick);        
 
         // convert sqrt price to price at tick
         uint256 priceX96 = FullMath.mulDiv(sqrtPriceX96, sqrtPriceX96, FixedPoint96.Q96);
@@ -106,7 +113,7 @@ contract sSuperUSDFallbackOracle {
     }
 
     function toInt24(int56 x) internal pure returns (int24) {
-        if(x > type(int24).max) revert ("Overflow cast to int24");
+        if(x > type(int24).max || x < type(int24).min) revert ("Overflow cast to int24");
         return int24(x);
     }
 
