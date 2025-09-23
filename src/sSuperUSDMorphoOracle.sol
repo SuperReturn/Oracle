@@ -68,11 +68,26 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
     /// @notice The latest answer
     int256 public latestAnswer;
 
-    /// @notice The timestamp of the last price update
-    uint256 public lastUpdateTimestamp;
+    /// @notice Price of the most recent update from the primary oracle
+    int256 public latestPrimaryPrice;
+
+    /// @notice Price of the most recent update from the fallback oracle
+    int256 public latestFallbackPrice;
 
     /// @notice Mapping of addresses that are allowed to execute updatePrice
     mapping(address => bool) public executors;
+
+    /// @notice Minimum delay between EMA updates
+    uint256 public minEMADelay = 1 hours;
+
+    /// @notice The timestamp of the last EMA update
+    uint256 public latestEMATime;
+
+    /// @notice The timestamp of the last primary oracle update
+    uint256 public latestPrimaryTime;
+
+    /// @notice The timestamp of the last fallback oracle update
+    uint256 public latestFallbackTime;
 
     /**
      *
@@ -91,12 +106,16 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
     event BaseBoundsUpdated(uint256 oldUpperBound, uint256 oldLowerBound, uint256 newUpperBound, uint256 newLowerBound);
     event NoPriceUpdate(string reason, uint256 primaryPrice, uint256 fallbackPrice);
     event ExecutorUpdated(address indexed executor, bool isExecutor);
-
+    event MinEMADelayUpdated(uint256 oldDelay, uint256 newDelay);
+    event EMAUpdateSkipped(uint256 timeSinceLastUpdate, uint256 requiredDelay);
+    event PrimaryOracleReverted();
+    event FallbackOracleReverted();
     /**
      *
      * ERRORS
      *
      */
+
     error AddressZero();
     error NotOwner();
     error InvalidBounds();
@@ -153,10 +172,15 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
         loanDecimals = IERC20Metadata(_loanToken).decimals();
 
         // Initialize latestEMA with first price
-        ( /* roundId */ , int256 initialPrice, /* startedAt */, /* updatedAt */, /* answeredInRound */ ) =
+        ( /* roundId */ , latestPrimaryPrice, /* startedAt */, latestPrimaryTime, /* answeredInRound */ ) =
             IsSuperUSDOracle(_sSuperUSDOracleAddress).latestRoundData();
-        latestEMA = initialPrice;
-        latestAnswer = initialPrice;
+        latestEMA = latestPrimaryPrice;
+        latestAnswer = latestPrimaryPrice;
+
+        latestEMATime = 0;
+
+        ( /* roundId */ , latestFallbackPrice, /* startedAt */, latestFallbackTime, /* answeredInRound */ ) =
+            IsSuperUSDOracle(_sSuperUSDFallbackOracleAddress).latestRoundData();
 
         // Convert latestEMA to uint256 for bounds calculation
         EMAUpperBound = uint256(latestEMA).mulDivDown(baseUpperBound, 1e4);
@@ -171,93 +195,97 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
 
     /// @notice Computes and updates the exchange rate using EMA
     function updatePrice() public nonReentrant onlyExecutor {
-        address primaryAccountant = IsSuperUSDOracle(sSuperUSDOracleAddress).sSuperUSDAccountant();
-        IAccountant.AccountantState memory state = IAccountant(primaryAccountant).accountantState();
-
-        if (state.lastUpdateTimestamp == lastUpdateTimestamp) {
-            emit PrimaryPriceUsed(uint256(latestAnswer));
-            return;
-        }
-
         bool isPrimaryFresh = false;
         bool isFallbackFresh = false;
         bool isPrimaryPriceOutOfRange = false;
         bool isFallbackPriceOutOfRange = false;
-        uint256 lastUpdateTimestampFallback;
-        int256 primaryOraclePrice;
-        int256 fallbackOraclePrice;
         int256 newPriceForEMA;
         int256 oldEMA = latestEMA;
+        uint256 newEMATime;
+
+        // primary oracle check
+        try IsSuperUSDOracle(sSuperUSDOracleAddress).latestRoundData() {
+            ( /* roundId */ , latestPrimaryPrice, /* startedAt */, latestPrimaryTime, /* answeredInRound */ ) =
+                IsSuperUSDOracle(sSuperUSDOracleAddress).latestRoundData();
+        } catch {
+            emit PrimaryOracleReverted();
+        }
+
+        // fallback oracle check
+        try IsSuperUSDOracle(sSuperUSDFallbackOracleAddress).latestRoundData() {
+            ( /* roundId */ , latestFallbackPrice, /* startedAt */, latestFallbackTime, /* answeredInRound */ ) =
+                IsSuperUSDOracle(sSuperUSDFallbackOracleAddress).latestRoundData();
+        } catch {
+            emit FallbackOracleReverted();
+        }
 
         // Fresh check
-        if (block.timestamp - state.lastUpdateTimestamp <= maxPriceAge) {
+        if (block.timestamp - latestPrimaryTime <= maxPriceAge) {
             isPrimaryFresh = true;
         }
-        ( /* roundId */ , fallbackOraclePrice, /* startedAt */, lastUpdateTimestampFallback, /* answeredInRound */ ) =
-            IsSuperUSDOracle(sSuperUSDFallbackOracleAddress).latestRoundData();
-        if (block.timestamp - lastUpdateTimestampFallback <= maxPriceAge) {
+
+        if (block.timestamp - latestFallbackTime <= maxPriceAge) {
             isFallbackFresh = true;
         }
 
         // bound check
-        ( /* roundId */ , primaryOraclePrice, /* startedAt */, /* updatedAt */, /* answeredInRound */ ) =
-            IsSuperUSDOracle(sSuperUSDOracleAddress).latestRoundData();
-        if (uint256(primaryOraclePrice) > EMAUpperBound || uint256(primaryOraclePrice) < EMALowerBound) {
+        if (uint256(latestPrimaryPrice) > EMAUpperBound || uint256(latestPrimaryPrice) < EMALowerBound) {
             isPrimaryPriceOutOfRange = true;
         }
 
-        if (uint256(fallbackOraclePrice) > EMAUpperBound || uint256(fallbackOraclePrice) < EMALowerBound) {
+        if (uint256(latestFallbackPrice) > EMAUpperBound || uint256(latestFallbackPrice) < EMALowerBound) {
             isFallbackPriceOutOfRange = true;
         }
 
         if (isPrimaryFresh && !isPrimaryPriceOutOfRange) {
-            //    update global price with price
-            latestAnswer = primaryOraclePrice;
-            //    update EMA with global price
+            latestAnswer = latestPrimaryPrice;
             newPriceForEMA = latestAnswer;
+            newEMATime = latestPrimaryTime;
             emit PrimaryPriceUsed(uint256(latestAnswer));
         } else if (isFallbackFresh && !isFallbackPriceOutOfRange) {
-            //     update global price with fallback price
-            latestAnswer = fallbackOraclePrice;
-            //     update EMA with global price
+            latestAnswer = latestFallbackPrice;
             newPriceForEMA = latestAnswer;
+            newEMATime = latestFallbackTime;
             emit FallbackPriceUsed(uint256(latestAnswer), "price_out_of_bounds");
         } else {
-            // no global price update
             string memory reason;
             if (isPrimaryFresh) {
-                // update EMA with primary
-                newPriceForEMA = primaryOraclePrice;
+                newPriceForEMA = latestPrimaryPrice;
+                newEMATime = latestPrimaryTime;
                 reason = "primary_price_used_but_no_update";
             } else if (isFallbackFresh) {
-                // update EMA with fallback
-                newPriceForEMA = fallbackOraclePrice;
+                newPriceForEMA = latestFallbackPrice;
+                newEMATime = latestFallbackTime;
                 reason = "fallback_price_used_but_no_update";
             } else {
                 reason = "both_price_are_not_fresh";
-                emit NoPriceUpdate(reason, uint256(primaryOraclePrice), uint256(fallbackOraclePrice));
+                emit NoPriceUpdate(reason, uint256(latestPrimaryPrice), uint256(latestFallbackPrice));
                 return;
             }
-            emit NoPriceUpdate(reason, uint256(primaryOraclePrice), uint256(fallbackOraclePrice));
+            emit NoPriceUpdate(reason, uint256(latestPrimaryPrice), uint256(latestFallbackPrice));
         }
 
-        // Calculate new EMA
-        // EMA = α * currentPrice + (1 - α) * previousEMA
-        // where α is the multiplier = 2/(N+1), N=10 days
-        // 2/(10+1) ≈ 0.2 = 20% = 2000 (scaled by 1e4)
-        latestEMA =
-            (newPriceForEMA * int256(multiplier) + oldEMA * int256(10000 - multiplier)) / int256(10000);
+        // Only update EMA if enough time has passed since latest update
+        if (newEMATime > latestEMATime + minEMADelay) {
+            // Calculate new EMA
+            // EMA = α * currentPrice + (1 - α) * previousEMA
+            // where α is the multiplier = 2/(N+1), N=10 days
+            // 2/(10+1) ≈ 0.2 = 20% = 2000 (scaled by 1e4)
+            latestEMA = (newPriceForEMA * int256(multiplier) + oldEMA * int256(10000 - multiplier)) / int256(10000);
 
-        // Update bounds based on new EMA
-        EMAUpperBound = uint256(latestEMA).mulDivDown(baseUpperBound, 1e4);
-        EMALowerBound = uint256(latestEMA).mulDivDown(baseLowerBound, 1e4);
+            // Update bounds based on new EMA
+            EMAUpperBound = uint256(latestEMA).mulDivDown(baseUpperBound, 1e4);
+            EMALowerBound = uint256(latestEMA).mulDivDown(baseLowerBound, 1e4);
 
-        // Emit events
-        emit MovingAverageUpdated(uint256(oldEMA), uint256(latestEMA));
-        emit BoundsUpdated(EMAUpperBound, EMALowerBound);
+            // Update latestEMATime
+            latestEMATime = newEMATime;
 
-        // Update lastUpdateTimestamp
-        lastUpdateTimestamp = state.lastUpdateTimestamp;
+            // Emit events
+            emit MovingAverageUpdated(uint256(oldEMA), uint256(latestEMA));
+            emit BoundsUpdated(EMAUpperBound, EMALowerBound);
+        } else {
+            emit EMAUpdateSkipped(newEMATime - latestEMATime, minEMADelay);
+        }
     }
 
     /// @notice Returns the latest price without updating it
@@ -359,6 +387,16 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
         if (_executor == address(0)) revert AddressZero();
         executors[_executor] = _isExecutor;
         emit ExecutorUpdated(_executor, _isExecutor);
+    }
+
+    /**
+     * @notice Updates the minimum delay required between EMA updates
+     * @param _newDelay The new minimum delay in seconds
+     */
+    function updateMinEMADelay(uint256 _newDelay) external onlyOwner {
+        uint256 oldDelay = minEMADelay;
+        minEMADelay = _newDelay;
+        emit MinEMADelayUpdated(oldDelay, _newDelay);
     }
 
     /**

@@ -54,14 +54,20 @@ contract MockToken is IERC20Metadata {
 contract MockOracle is IsSuperUSDOracle {
     address public immutable accountant;
     int256 private _rate;
+    uint256 private _latestUpdateTimestamp;
 
     constructor(address _accountant, int256 initialRate) {
         accountant = _accountant;
         _rate = initialRate;
+        _latestUpdateTimestamp = block.timestamp;
     }
 
     function setRate(int256 newRate) external {
         _rate = newRate;
+    }
+
+    function setLatestUpdateTimestamp(uint256 newLatestUpdateTimestamp) external {
+        _latestUpdateTimestamp = newLatestUpdateTimestamp;
     }
 
     function latestRoundData()
@@ -70,7 +76,7 @@ contract MockOracle is IsSuperUSDOracle {
         override
         returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)
     {
-        return (0, _rate, block.timestamp, block.timestamp, 0);
+        return (0, _rate, _latestUpdateTimestamp, _latestUpdateTimestamp, 0);
     }
 
     function sSuperUSDAccountant() external view override returns (address) {
@@ -80,6 +86,8 @@ contract MockOracle is IsSuperUSDOracle {
 
 contract MockAccountant is IAccountant {
     AccountantState private _state;
+
+    error AccountantWithRateProviders__Paused();
 
     constructor() {
         _state.lastUpdateTimestamp = uint64(block.timestamp);
@@ -95,6 +103,11 @@ contract MockAccountant is IAccountant {
     }
 
     function getRate() external view override returns (uint256) {
+        return _state.exchangeRate;
+    }
+
+    function getRateSafe() external view override returns (uint256) {
+        if (_state.isPaused) revert AccountantWithRateProviders__Paused();
         return _state.exchangeRate;
     }
 }
@@ -164,7 +177,6 @@ contract sSuperUSDMorphoOracleTest is Test {
         assertEq(oracle.loanDecimals(), 6);
         assertEq(oracle.latestEMA(), 1e8);
         assertEq(oracle.latestAnswer(), 1e8);
-        assertEq(oracle.lastUpdateTimestamp(), 0);
         assertEq(oracle.maxPriceAge(), 48 hours);
         assertEq(oracle.baseUpperBound(), 10500);
         assertEq(oracle.baseLowerBound(), 9500);
@@ -257,8 +269,6 @@ contract sSuperUSDMorphoOracleTest is Test {
         assertEq(oracle.EMAUpperBound(), expectedEMAUpperBound);
         // EMALowerBound
         assertEq(oracle.EMALowerBound(), expectedEMALowerBound);
-        // lastUpdateTimestamp
-        assertEq(oracle.lastUpdateTimestamp(), state.lastUpdateTimestamp);
     }
 
     function test_UpdatePrice_PrimaryOracleFreshAndOutOfBoundsAndFallbackInBounds() public {
@@ -305,8 +315,6 @@ contract sSuperUSDMorphoOracleTest is Test {
         assertEq(oracle.EMAUpperBound(), expectedEMAUpperBound);
         // EMALowerBound
         assertEq(oracle.EMALowerBound(), expectedEMALowerBound);
-        // lastUpdateTimestamp
-        assertEq(oracle.lastUpdateTimestamp(), state.lastUpdateTimestamp);
     }
 
     function test_UpdatePrice_PrimaryOracleFreshAndOutOfBoundsAndFallbackOutOfBounds() public {
@@ -354,8 +362,6 @@ contract sSuperUSDMorphoOracleTest is Test {
         assertEq(oracle.EMAUpperBound(), expectedEMAUpperBound);
         // EMALowerBound
         assertEq(oracle.EMALowerBound(), expectedEMALowerBound);
-        // lastUpdateTimestamp
-        assertEq(oracle.lastUpdateTimestamp(), state.lastUpdateTimestamp);
     }
 
     function test_UpdatePrice_PrimaryOracleStaleAndInBoundsAndFallbackInBounds() public {
@@ -364,6 +370,7 @@ contract sSuperUSDMorphoOracleTest is Test {
         // set primary oracle price to 1.001e8
         int256 newPrice = 1.001e8;
         primaryOracle.setRate(newPrice);
+        primaryOracle.setLatestUpdateTimestamp(block.timestamp - 5 days);
         // set accountant timestamp to 5 days ago
         IAccountant.AccountantState memory state = accountant.accountantState();
         state.lastUpdateTimestamp = uint64(block.timestamp - 5 days);
@@ -402,8 +409,6 @@ contract sSuperUSDMorphoOracleTest is Test {
         assertEq(oracle.EMAUpperBound(), expectedEMAUpperBound);
         // EMALowerBound
         assertEq(oracle.EMALowerBound(), expectedEMALowerBound);
-        // lastUpdateTimestamp
-        assertEq(oracle.lastUpdateTimestamp(), state.lastUpdateTimestamp);
     }
 
     function test_UpdatePrice_PrimaryOracleStaleAndInBoundsAndFallbackOutOfBounds() public {
@@ -412,6 +417,7 @@ contract sSuperUSDMorphoOracleTest is Test {
         // set primary oracle price to 1.001e8
         int256 newPrice = 1.001e8;
         primaryOracle.setRate(newPrice);
+        primaryOracle.setLatestUpdateTimestamp(block.timestamp - 5 days);
         // set accountant timestamp to 5 days ago
         IAccountant.AccountantState memory state = accountant.accountantState();
         state.lastUpdateTimestamp = uint64(block.timestamp - 5 days);
@@ -451,8 +457,6 @@ contract sSuperUSDMorphoOracleTest is Test {
         assertEq(oracle.EMAUpperBound(), expectedEMAUpperBound);
         // EMALowerBound
         assertEq(oracle.EMALowerBound(), expectedEMALowerBound);
-        // lastUpdateTimestamp
-        assertEq(oracle.lastUpdateTimestamp(), state.lastUpdateTimestamp);
     }
 
     function test_UpdatePrice_PrimaryOracleStaleAndOutOfBoundsAndFallbackInBounds() public {
@@ -499,8 +503,6 @@ contract sSuperUSDMorphoOracleTest is Test {
         assertEq(oracle.EMAUpperBound(), expectedEMAUpperBound);
         // EMALowerBound
         assertEq(oracle.EMALowerBound(), expectedEMALowerBound);
-        // lastUpdateTimestamp
-        assertEq(oracle.lastUpdateTimestamp(), state.lastUpdateTimestamp);
     }
 
     function test_UpdatePrice_PrimaryOracleStaleAndOutOfBoundsAndFallbackOutOfBounds() public {
@@ -509,6 +511,7 @@ contract sSuperUSDMorphoOracleTest is Test {
         // set primary oracle price to 1.1e8
         int256 newPrice = 1.1e8;
         primaryOracle.setRate(newPrice);
+        primaryOracle.setLatestUpdateTimestamp(block.timestamp - 5 days);
         // set accountant timestamp to 5 days ago
         IAccountant.AccountantState memory state = accountant.accountantState();
         state.lastUpdateTimestamp = uint64(block.timestamp - 5 days);
@@ -548,8 +551,6 @@ contract sSuperUSDMorphoOracleTest is Test {
         assertEq(oracle.EMAUpperBound(), expectedEMAUpperBound);
         // EMALowerBound
         assertEq(oracle.EMALowerBound(), expectedEMALowerBound);
-        // lastUpdateTimestamp
-        assertEq(oracle.lastUpdateTimestamp(), state.lastUpdateTimestamp);
     }
 
     function test_AdminFunctions() public {
