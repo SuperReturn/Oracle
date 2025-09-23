@@ -4,8 +4,6 @@ pragma solidity ^0.8.21;
 import {IsSuperUSDOracle} from "./interfaces/IsSuperUSDOracle.sol";
 import {IAccountant} from "./interfaces/IAccountant.sol";
 
-error AccountantWithRateProviders__Paused();
-error sSuperUSDOracle__StalePrice();
 
 contract sSuperUSDOracle is IsSuperUSDOracle {
     address public owner;
