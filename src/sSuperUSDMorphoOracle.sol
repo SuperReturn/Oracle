@@ -68,6 +68,12 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
     /// @notice The latest answer
     int256 public latestAnswer;
 
+    /// @notice Price of the most recent update from the primary oracle
+    int256 public lastPrimaryPrice;
+
+    /// @notice Price of the most recent update from the fallback oracle
+    int256 public lastFallbackPrice;
+
     /// @notice Mapping of addresses that are allowed to execute updatePrice
     mapping(address => bool) public executors;
 
@@ -102,12 +108,14 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
     event ExecutorUpdated(address indexed executor, bool isExecutor);
     event MinEMADelayUpdated(uint256 oldDelay, uint256 newDelay);
     event EMAUpdateSkipped(uint256 timeSinceLastUpdate, uint256 requiredDelay);
-
+    event PrimaryOracleReverted();
+    event FallbackOracleReverted();
     /**
      *
      * ERRORS
      *
      */
+
     error AddressZero();
     error NotOwner();
     error InvalidBounds();
@@ -164,12 +172,15 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
         loanDecimals = IERC20Metadata(_loanToken).decimals();
 
         // Initialize latestEMA with first price
-        ( /* roundId */ , int256 initialPrice, /* startedAt */, /* updatedAt */, /* answeredInRound */ ) =
+        ( /* roundId */ , lastPrimaryPrice, /* startedAt */, lastPrimaryTime, /* answeredInRound */ ) =
             IsSuperUSDOracle(_sSuperUSDOracleAddress).latestRoundData();
-        latestEMA = initialPrice;
-        latestAnswer = initialPrice;
+        latestEMA = lastPrimaryPrice;
+        latestAnswer = lastPrimaryPrice;
 
         lastEMATime = 0;
+
+        ( /* roundId */ , lastFallbackPrice, /* startedAt */, lastFallbackTime, /* answeredInRound */ ) =
+            IsSuperUSDOracle(_sSuperUSDFallbackOracleAddress).latestRoundData();
 
         // Convert latestEMA to uint256 for bounds calculation
         EMAUpperBound = uint256(latestEMA).mulDivDown(baseUpperBound, 1e4);
@@ -184,39 +195,62 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
 
     /// @notice Computes and updates the exchange rate using EMA
     function updatePrice() public nonReentrant onlyExecutor {
-        address primaryAccountant = IsSuperUSDOracle(sSuperUSDOracleAddress).sSuperUSDAccountant();
-        IAccountant.AccountantState memory state = IAccountant(primaryAccountant).accountantState();
-
         bool isPrimaryFresh = false;
         bool isFallbackFresh = false;
         bool isPrimaryPriceOutOfRange = false;
         bool isFallbackPriceOutOfRange = false;
-        uint256 lastUpdateTimestampFallback;
+        bool isPrimaryRevert = false;
+        bool isFallbackRevert = false;
         int256 primaryOraclePrice;
         int256 fallbackOraclePrice;
         int256 newPriceForEMA;
         int256 oldEMA = latestEMA;
         uint256 newEMATime;
-        
-        lastPrimaryTime = state.lastUpdateTimestamp;
+
+        // primary revert check
+        try IsSuperUSDOracle(sSuperUSDOracleAddress).latestRoundData() {
+            isPrimaryRevert = false;
+        } catch {
+            isPrimaryRevert = true;
+            emit PrimaryOracleReverted();
+        }
+
+        // fallback revert check
+        try IsSuperUSDOracle(sSuperUSDFallbackOracleAddress).latestRoundData() {
+            isFallbackRevert = false;
+        } catch {
+            isFallbackRevert = true;
+            emit FallbackOracleReverted();
+        }
+
+        if (isPrimaryRevert) {
+            primaryOraclePrice = lastPrimaryPrice;
+            // lastPrimaryPrice and lastPrimaryTime don't need to update
+        } else {
+            ( /* roundId */ , lastPrimaryPrice, /* startedAt */, lastPrimaryTime, /* answeredInRound */ ) =
+                IsSuperUSDOracle(sSuperUSDOracleAddress).latestRoundData();
+            primaryOraclePrice = lastPrimaryPrice;
+        }
+
+        if (isFallbackRevert) {
+            fallbackOraclePrice = lastFallbackPrice;
+            // lastFallbackPrice and lastFallbackTime don't need to update
+        } else {
+            ( /* roundId */ , lastFallbackPrice, /* startedAt */, lastFallbackTime, /* answeredInRound */ ) =
+                IsSuperUSDOracle(sSuperUSDFallbackOracleAddress).latestRoundData();
+            fallbackOraclePrice = lastFallbackPrice;
+        }
 
         // Fresh check
-        if (block.timestamp - state.lastUpdateTimestamp <= maxPriceAge) {
+        if (block.timestamp - lastPrimaryTime <= maxPriceAge) {
             isPrimaryFresh = true;
         }
 
-        ( /* roundId */ , fallbackOraclePrice, /* startedAt */, lastUpdateTimestampFallback, /* answeredInRound */ ) =
-            IsSuperUSDOracle(sSuperUSDFallbackOracleAddress).latestRoundData();
-        lastFallbackTime = lastUpdateTimestampFallback;
-        
-        if (block.timestamp - lastUpdateTimestampFallback <= maxPriceAge) {
+        if (block.timestamp - lastFallbackTime <= maxPriceAge) {
             isFallbackFresh = true;
         }
 
         // bound check
-        ( /* roundId */ , primaryOraclePrice, /* startedAt */, /* updatedAt */, /* answeredInRound */ ) =
-            IsSuperUSDOracle(sSuperUSDOracleAddress).latestRoundData();
-        
         if (uint256(primaryOraclePrice) > EMAUpperBound || uint256(primaryOraclePrice) < EMALowerBound) {
             isPrimaryPriceOutOfRange = true;
         }

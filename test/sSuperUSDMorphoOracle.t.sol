@@ -54,14 +54,20 @@ contract MockToken is IERC20Metadata {
 contract MockOracle is IsSuperUSDOracle {
     address public immutable accountant;
     int256 private _rate;
+    uint256 private _lastUpdateTimestamp;
 
     constructor(address _accountant, int256 initialRate) {
         accountant = _accountant;
         _rate = initialRate;
+        _lastUpdateTimestamp = block.timestamp;
     }
 
     function setRate(int256 newRate) external {
         _rate = newRate;
+    }
+
+    function setLastUpdateTimestamp(uint256 newLastUpdateTimestamp) external {
+        _lastUpdateTimestamp = newLastUpdateTimestamp;
     }
 
     function latestRoundData()
@@ -70,7 +76,7 @@ contract MockOracle is IsSuperUSDOracle {
         override
         returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)
     {
-        return (0, _rate, block.timestamp, block.timestamp, 0);
+        return (0, _rate, _lastUpdateTimestamp, _lastUpdateTimestamp, 0);
     }
 
     function sSuperUSDAccountant() external view override returns (address) {
@@ -80,6 +86,8 @@ contract MockOracle is IsSuperUSDOracle {
 
 contract MockAccountant is IAccountant {
     AccountantState private _state;
+
+    error AccountantWithRateProviders__Paused();
 
     constructor() {
         _state.lastUpdateTimestamp = uint64(block.timestamp);
@@ -95,6 +103,11 @@ contract MockAccountant is IAccountant {
     }
 
     function getRate() external view override returns (uint256) {
+        return _state.exchangeRate;
+    }
+
+    function getRateSafe() external view override returns (uint256) {
+        if (_state.isPaused) revert AccountantWithRateProviders__Paused();
         return _state.exchangeRate;
     }
 }
@@ -357,6 +370,7 @@ contract sSuperUSDMorphoOracleTest is Test {
         // set primary oracle price to 1.001e8
         int256 newPrice = 1.001e8;
         primaryOracle.setRate(newPrice);
+        primaryOracle.setLastUpdateTimestamp(block.timestamp - 5 days);
         // set accountant timestamp to 5 days ago
         IAccountant.AccountantState memory state = accountant.accountantState();
         state.lastUpdateTimestamp = uint64(block.timestamp - 5 days);
@@ -403,6 +417,7 @@ contract sSuperUSDMorphoOracleTest is Test {
         // set primary oracle price to 1.001e8
         int256 newPrice = 1.001e8;
         primaryOracle.setRate(newPrice);
+        primaryOracle.setLastUpdateTimestamp(block.timestamp - 5 days);
         // set accountant timestamp to 5 days ago
         IAccountant.AccountantState memory state = accountant.accountantState();
         state.lastUpdateTimestamp = uint64(block.timestamp - 5 days);
@@ -496,6 +511,7 @@ contract sSuperUSDMorphoOracleTest is Test {
         // set primary oracle price to 1.1e8
         int256 newPrice = 1.1e8;
         primaryOracle.setRate(newPrice);
+        primaryOracle.setLastUpdateTimestamp(block.timestamp - 5 days);
         // set accountant timestamp to 5 days ago
         IAccountant.AccountantState memory state = accountant.accountantState();
         state.lastUpdateTimestamp = uint64(block.timestamp - 5 days);
