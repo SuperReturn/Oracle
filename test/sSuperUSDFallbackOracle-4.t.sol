@@ -5,37 +5,40 @@ import {Test} from "forge-std/Test.sol";
 import {sSuperUSDFallbackOracle} from "../src/sSuperUSDFallbackOracle.sol";
 import {console} from "forge-std/console.sol";
 
-// test against the Uniswap sSuperUSD-USDC 0.05% pool on Arbitrum
+// test against the Kyo SolvBTC-SolvBTCJUP 0.05% pool on Soneium
 contract sSuperUSDFallbackOracleTest is Test {
     // Test contract state variables
     sSuperUSDFallbackOracle public oracle01;
     sSuperUSDFallbackOracle public oracle10;
     address public owner;
-    address public uniV3Pool = 0xE4BDd6902F56eF4e2DEF0223949dF1c4038Bea4a;
+    address public uniV3Pool = 0x3fe298aa69EC9A033896119172e01a6FF530e4b8;
 
     // Fork configuration
-    uint256 public forkBlock = 379967942;
-    uint256 public arbitrumFork;
+    uint256 public forkBlock = 12736900;
+    uint256 public soneiumFork;
 
     // Events to test
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event TwapIntervalSet(uint32 twapInterval);
 
+    // error from uni v3 pool
+    error OLD();
+
     function setUp() public {
         // Create and select fork
-        arbitrumFork = vm.createFork(
-            vm.envString("ARBITRUM_RPC_URL"),
+        soneiumFork = vm.createFork(
+            vm.envString("SONEIUM_RPC_URL"),
             forkBlock
         );
-        vm.selectFork(arbitrumFork);
+        vm.selectFork(soneiumFork);
         
         // Set up test addresses
         owner = address(this);
         
-        // Deploy oracle - 1 sSuperUSD = x USDC
-        oracle01 = new sSuperUSDFallbackOracle(uniV3Pool, true, 6, 6, 60);
-        // Deploy oracle in other direction
-        oracle10 = new sSuperUSDFallbackOracle(uniV3Pool, false, 6, 6, 60);
+        // Deploy oracle - 1 SolvBTC = x SolvBTCJUP
+        oracle01 = new sSuperUSDFallbackOracle(uniV3Pool, true, 18, 18, 60);
+        // Deploy oracle in other direction - x SolvBTC = 1 SolvBTCJUP
+        oracle10 = new sSuperUSDFallbackOracle(uniV3Pool, false, 18, 18, 60);
         
         // Verify initial state
         assertEq(oracle01.owner(), address(this));
@@ -47,27 +50,27 @@ contract sSuperUSDFallbackOracleTest is Test {
         assertEq(oracle01.owner(), address(this));
         assertEq(oracle01.uniV3Pool(), uniV3Pool);
         assertEq(oracle01.zeroForOne(), true);
-        assertEq(oracle01.decimals0(), 6);
-        assertEq(oracle01.decimals1(), 6);
+        assertEq(oracle01.decimals0(), 18);
+        assertEq(oracle01.decimals1(), 18);
         assertEq(oracle01.twapInterval(), 60);
     }
     
     // Test constructor with zero address
     function test_Constructor_RevertZeroAddress() public {
         vm.expectRevert("Pool cannot be zero address");
-        new sSuperUSDFallbackOracle(address(0), true, 6, 6, 60);
+        new sSuperUSDFallbackOracle(address(0), true, 18, 18, 60);
     }
     
     // Test constructor with zero twap interval
     function test_Constructor_RevertZeroTwapInterval() public {
         vm.expectRevert("Twap interval cannot be 0");
-        new sSuperUSDFallbackOracle(uniV3Pool, true, 6, 6, 0);
+        new sSuperUSDFallbackOracle(uniV3Pool, true, 18, 18, 0);
     }
     
     // Test constructor with too long twap interval
     function test_Constructor_RevertTooLongTwapInterval() public {
         vm.expectRevert("Twap interval too long");
-        new sSuperUSDFallbackOracle(uniV3Pool, true, 6, 6, 604801);
+        new sSuperUSDFallbackOracle(uniV3Pool, true, 18, 18, 604801);
     }
 
 
@@ -94,6 +97,7 @@ contract sSuperUSDFallbackOracleTest is Test {
         vm.prank(nonOwner);
         vm.expectRevert("Only owner can call this function");
         oracle01.transferOwnership(makeAddr("newOwner"));
+        oracle10.transferOwnership(makeAddr("newOwner"));
     }
 
     function test_LatestAnswer01() public {
@@ -101,13 +105,13 @@ contract sSuperUSDFallbackOracleTest is Test {
         //console.log("Latest Answer :", latestAnswer);
         //console.log("One           :", uint256(100000000));
         // current price is 1.03
-        assertEq(latestAnswer, 102993791);
+        assertEq(latestAnswer, 94129661);
         // Get latest round data
         (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound) =
             oracle01.latestRoundData();
         // Verify the returned values
         assertEq(roundId, 0);
-        assertEq(answer, 102993791);
+        assertEq(answer, 94129661);
         assertEq(startedAt, block.timestamp);
         assertEq(updatedAt, block.timestamp);
         assertEq(answeredInRound, 0);
@@ -118,13 +122,13 @@ contract sSuperUSDFallbackOracleTest is Test {
         //console.log("Latest Answer :", latestAnswer);
         //console.log("One           :", uint256(100000000));
         // 1 / 1.03
-        assertEq(latestAnswer, 97093230);
+        assertEq(latestAnswer, 106236438);
         // Get latest round data
         (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound) =
             oracle10.latestRoundData();
         // Verify the returned values
         assertEq(roundId, 0);
-        assertEq(answer, 97093230);
+        assertEq(answer, 106236438);
         assertEq(startedAt, block.timestamp);
         assertEq(updatedAt, block.timestamp);
         assertEq(answeredInRound, 0);
@@ -166,11 +170,29 @@ contract sSuperUSDFallbackOracleTest is Test {
         oracle10.setTwapInterval(86400);
         assertEq(oracle01.twapInterval(), 86400);
         assertEq(oracle10.twapInterval(), 86400);
+
+        // observation cardinality of this pool is too low, will revert with UniswapV3Pool.OLD()
+
+        vm.expectRevert(OLD.selector);
         int256 latestAnswer01 = oracle01.latestAnswer();
+
+        vm.expectRevert(OLD.selector);
         int256 latestAnswer10 = oracle10.latestAnswer();
-        //console.log("Latest Answer 01 :", latestAnswer01);
-        //console.log("Latest Answer 10 :", latestAnswer10);
-        assertEq(latestAnswer01, 102993791); // no swaps recently, numbers are the same
-        assertEq(latestAnswer10, 97093230);
+
+        /*
+        console.log("getting latest answer 01");
+        int256 latestAnswer01 = oracle01.latestAnswer();
+        console.log("Latest Answer 01 :", latestAnswer01);
+
+        console.log("getting latest answer 10");
+        int256 latestAnswer10 = oracle10.latestAnswer();
+        console.log("Latest Answer 10 :", latestAnswer10);
+
+        assertEq(latestAnswer01, 103055603);
+        assertEq(latestAnswer10, 97034995);
+        */
+
+        //console.log("max int24", type(int24).max);
+        //console.log("min int24", type(int24).min);
     }
 }

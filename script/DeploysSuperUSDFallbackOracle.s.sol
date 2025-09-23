@@ -14,7 +14,8 @@ contract DeploySSuperUSDFallbackOracle is Script {
         bool zeroForOne = true; // 1 sSuperUSD = x USDC
         uint8 decimals0 = 6; // sSuperUSD
         uint8 decimals1 = 6; // USDC
-        uint32 twapInterval = 3600; // one hour
+        //uint32 twapInterval = 3600; // one hour
+        uint32 twapInterval = 21600; // six hours
 
         sSuperUSDFallbackOracle oracle = new sSuperUSDFallbackOracle(uniV3Pool, zeroForOne, decimals0, decimals1, twapInterval);
 

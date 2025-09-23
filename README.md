@@ -22,6 +22,17 @@ The primary oracle contract that provides price data for sSuperUSD.
 - Owner-controlled contract with ownership transfer capability
 - Real-time price updates from Accountant
 
+### sSuperUSDFallbackOracle
+
+The secondary oracle contract that provides price data for sSuperUSD.
+
+**Key Features:**
+- Reads the TWAP from a Uniswap V3 pool
+- Price conversion to 8 decimals
+- Immutable pool address
+- TWAP interval can be adjusted by contract owner
+- Price updates over time and trades
+
 ### sSuperUSDMorphoOracle
 
 An advanced oracle implementation with additional safety features.
