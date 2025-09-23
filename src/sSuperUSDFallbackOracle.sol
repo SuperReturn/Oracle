@@ -8,6 +8,9 @@ import { FullMath } from "./libraries/FullMath.sol";
 import { FixedPoint96 } from "./libraries/FixedPoint96.sol";
 
 
+/// @title sSuperUSDFallbackOracle
+/// @author SuperReturn
+/// @notice An oracle contract that reads the TWAP from a Uniswap V3 pool.
 contract sSuperUSDFallbackOracle {
 
     address public owner;
@@ -91,6 +94,7 @@ contract sSuperUSDFallbackOracle {
         // calculate the difference in tickCumulatives
         int56 tickCumulativesDiff;
         // overflow of tickCumulative is desired per uni v3
+        // dev: unchecked block only required in solidity 0.8.x
         unchecked {
             tickCumulativesDiff = tickCumulatives[1] - tickCumulatives[0];
         }
