@@ -13,6 +13,8 @@ contract sSuperUSDFallbackOracle {
     address public owner;
     uint32 public twapInterval;
 
+    uint32 internal constant MAX_TWAP_INTERVAL = 604800; // one week
+
     address public immutable uniV3Pool;
     bool public immutable zeroForOne;
     uint8 public immutable decimals0;
@@ -114,6 +116,7 @@ contract sSuperUSDFallbackOracle {
 
     function _setTwapInterval(uint32 _twapInterval) internal {
         if(_twapInterval == 0) revert ("Twap interval cannot be 0");
+        if(_twapInterval > MAX_TWAP_INTERVAL) revert ("Twap interval too long");
         twapInterval = _twapInterval;
         emit TwapIntervalSet(_twapInterval);
     }

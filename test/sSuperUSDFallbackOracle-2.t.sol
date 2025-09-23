@@ -63,6 +63,13 @@ contract sSuperUSDFallbackOracleTest is Test {
         vm.expectRevert("Twap interval cannot be 0");
         new sSuperUSDFallbackOracle(uniV3Pool, true, 18, 6, 0);
     }
+    
+    // Test constructor with too long twap interval
+    function test_Constructor_RevertTooLongTwapInterval() public {
+        vm.expectRevert("Twap interval too long");
+        new sSuperUSDFallbackOracle(uniV3Pool, true, 18, 6, 604801);
+    }
+
 
     // Test ownership transfer
     function test_TransferOwnership() public {
@@ -135,6 +142,12 @@ contract sSuperUSDFallbackOracleTest is Test {
     function test_RevertSetTwapIntervalToZero() public {
         vm.expectRevert("Twap interval cannot be 0");
         oracle01.setTwapInterval(0);
+    }
+
+    // test set twap interval too long
+    function test_RevertSetTwapIntervalTooLong() public {
+        vm.expectRevert("Twap interval too long");
+        oracle01.setTwapInterval(604801);
     }
 
     // test set twap interval
