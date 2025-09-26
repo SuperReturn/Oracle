@@ -91,9 +91,6 @@ contract AggregatorProxy is AggregatorV3Interface, ReentrancyGuard {
     /// @notice The timestamp of the latestAnswer update
     uint256 public latestUpdateTime;
 
-    /// @notice Whether the primary oracle has reverted
-    bool public isPrimaryReverted;
-
     /**
      *
      * EVENTS
@@ -182,7 +179,6 @@ contract AggregatorProxy is AggregatorV3Interface, ReentrancyGuard {
         latestEMA = latestPrimaryPrice;
         latestAnswer = latestPrimaryPrice;
         latestUpdateTime = latestPrimaryTime;
-        isPrimaryReverted = false;
 
         latestEMATime = 0;
 
@@ -212,32 +208,30 @@ contract AggregatorProxy is AggregatorV3Interface, ReentrancyGuard {
 
         // primary oracle check
         try IsSuperUSDOracle(sSuperUSDOracleAddress).latestRoundData() returns (
-            uint80 /* roundId */,
+            uint80, /* roundId */
             int256 price,
-            uint256 /* startedAt */,
+            uint256, /* startedAt */
             uint256 timestamp,
             uint80 /* answeredInRound */
         ) {
-            isPrimaryReverted = false;
             latestPrimaryPrice = price;
             latestPrimaryTime = timestamp;
         } catch {
-            isPrimaryReverted = true;
             emit PrimaryOracleReverted();
             return;
         }
 
         // fallback oracle check
-         try IsSuperUSDOracle(sSuperUSDFallbackOracleAddress).latestRoundData() returns (
-            uint80 /* roundId */,
+        try IsSuperUSDOracle(sSuperUSDFallbackOracleAddress).latestRoundData() returns (
+            uint80, /* roundId */
             int256 price,
-            uint256 /* startedAt */,
+            uint256, /* startedAt */
             uint256 timestamp,
             uint80 /* answeredInRound */
         ) {
             latestFallbackPrice = price;
             latestFallbackTime = timestamp;
-        }catch {
+        } catch {
             emit FallbackOracleReverted();
         }
 
@@ -332,39 +326,26 @@ contract AggregatorProxy is AggregatorV3Interface, ReentrancyGuard {
 
     /// @notice Get data from a specific round
     /// @param _roundId The round ID to get data for
-    function getRoundData(uint80 _roundId) external view returns (
-        uint80 roundId,
-        int256 answer,
-        uint256 startedAt,
-        uint256 updatedAt,
-        uint80 answeredInRound
-    ) {
+    function getRoundData(uint80 _roundId)
+        external
+        view
+        returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)
+    {
         // Since we don't maintain historical rounds, return latest data
-        return (
-            0,
-            latestAnswer,
-            latestUpdateTime,
-            latestUpdateTime,
-            0
-        );
+        return (0, latestAnswer, latestUpdateTime, latestUpdateTime, 0);
     }
 
     /// @notice Get the latest round data
-    function latestRoundData() external view returns (
-        uint80 roundId,
-        int256 answer,
-        uint256 startedAt,
-        uint256 updatedAt,
-        uint80 answeredInRound
-    ) {
-        require(!isPrimaryReverted, "Primary oracle has reverted");
-        return (
-            0,
-            latestAnswer,
-            latestUpdateTime,
-            latestUpdateTime,
-            0
-        );
+    function latestRoundData()
+        external
+        view
+        returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)
+    {
+        try IsSuperUSDOracle(sSuperUSDOracleAddress).latestRoundData() {
+            return (0, latestAnswer, latestUpdateTime, latestUpdateTime, 0);
+        } catch {
+            revert("Primary oracle has reverted");
+        }
     }
 
     /**
