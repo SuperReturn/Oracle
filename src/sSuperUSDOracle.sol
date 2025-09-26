@@ -13,11 +13,11 @@ contract sSuperUSDOracle is IsSuperUSDOracle {
 
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 
-    constructor(address _sSuperUSDAccountant, address _superUSDAccountant) {
+    constructor(address _superUSDAccountant, address _sSuperUSDAccountant) {
         require(_sSuperUSDAccountant != address(0), "Accountant cannot be zero address");
         owner = msg.sender;
-        sSuperUSDAccountant = _sSuperUSDAccountant;
         superUSDAccountant = _superUSDAccountant;
+        sSuperUSDAccountant = _sSuperUSDAccountant;
     }
 
     modifier onlyOwner() {
@@ -38,8 +38,8 @@ contract sSuperUSDOracle is IsSuperUSDOracle {
         returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)
     {
         // revert if accountant is paused
-        uint256 sSuperUSDRate = IAccountant(sSuperUSDAccountant).getRateSafe(); // 6 decimals
         uint256 superUSDRate = IAccountant(superUSDAccountant).getRateSafe(); // 6 decimals
+        uint256 sSuperUSDRate = IAccountant(sSuperUSDAccountant).getRateSafe(); // 6 decimals
 
         uint256 timestamp = IAccountant(sSuperUSDAccountant).accountantState().lastUpdateTimestamp;
 
