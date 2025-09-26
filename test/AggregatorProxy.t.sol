@@ -2,7 +2,8 @@
 pragma solidity ^0.8.21;
 
 import {Test} from "forge-std/Test.sol";
-import {sSuperUSDMorphoOracle, IsSuperUSDOracle, IAccountant} from "../src/sSuperUSDMorphoOracle.sol";
+import {AggregatorProxy, IsSuperUSDOracle} from "../src/AggregatorProxy.sol";
+import {IAccountant} from "../src/interfaces/IAccountant.sol";
 import {console} from "forge-std/console.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {FixedPointMathLib} from "@solmate/utils/FixedPointMathLib.sol";
@@ -84,6 +85,52 @@ contract MockOracle is IsSuperUSDOracle {
     }
 }
 
+contract MockPrimaryOracle is IsSuperUSDOracle {
+    address public immutable accountant1;
+    address public immutable accountant2;
+    int256 private _rate;
+    uint256 private _latestUpdateTimestamp;
+
+    constructor(address _accountant1, address _accountant2, int256 initialRate) {
+        accountant1 = _accountant1;
+        accountant2 = _accountant2;
+        _rate = initialRate;
+        _latestUpdateTimestamp = block.timestamp;
+    }
+
+    function setRate(int256 newRate) external {
+        _rate = newRate;
+    }
+
+    function setLatestUpdateTimestamp(uint256 newLatestUpdateTimestamp) external {
+        _latestUpdateTimestamp = newLatestUpdateTimestamp;
+    }
+
+    function latestRoundData()
+        external
+        view
+        override
+        returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)
+    {
+        uint256 superUSDRate = IAccountant(accountant1).getRateSafe(); // 6 decimals
+        uint256 sSuperUSDRate = IAccountant(accountant2).getRateSafe(); // 6 decimals
+
+        uint256 superUSDTimestamp = IAccountant(accountant1).accountantState().lastUpdateTimestamp;
+        uint256 sSuperUSDTimestamp = IAccountant(accountant2).accountantState().lastUpdateTimestamp;
+
+        uint256 timestamp = superUSDTimestamp > sSuperUSDTimestamp ? sSuperUSDTimestamp : superUSDTimestamp;
+
+        // Convert from 6 decimals to 8 decimals
+        uint256 adjustedRate = sSuperUSDRate * superUSDRate / 1e4; // 6 + 6 - 8 decimals
+
+        return (0, int256(adjustedRate), timestamp, timestamp, 0);
+    }
+
+    function sSuperUSDAccountant() external view override returns (address) {
+        return accountant2;
+    }
+}
+
 contract MockAccountant is IAccountant {
     AccountantState private _state;
 
@@ -96,6 +143,10 @@ contract MockAccountant is IAccountant {
 
     function setState(AccountantState memory newState) external {
         _state = newState;
+    }
+
+    function setRate(uint96 newRate) external {
+        _state.exchangeRate = newRate;
     }
 
     function accountantState() external view override returns (AccountantState memory) {
@@ -112,15 +163,15 @@ contract MockAccountant is IAccountant {
     }
 }
 
-contract sSuperUSDMorphoOracleTest is Test {
+contract AggregatorProxyTest is Test {
     using FixedPointMathLib for uint256;
 
-    sSuperUSDMorphoOracle public oracle;
+    AggregatorProxy public oracle;
     address public owner;
     address public executor; // Add executor
     MockToken public collateralToken;
     MockToken public loanToken;
-    MockOracle public primaryOracle;
+    MockPrimaryOracle public primaryOracle;
     MockOracle public fallbackOracle;
     MockAccountant public accountant;
 
@@ -151,11 +202,13 @@ contract sSuperUSDMorphoOracleTest is Test {
 
         // Deploy mock accountant and oracles
         accountant = new MockAccountant();
-        primaryOracle = new MockOracle(address(accountant), 1e8); // 1.0 with 8 decimals
+        primaryOracle = new MockPrimaryOracle(address(accountant), address(accountant), 1e8); // 1.0 with 8 decimals
+        primaryOracle.setLatestUpdateTimestamp(block.timestamp);
         fallbackOracle = new MockOracle(address(accountant), 1.3e8); // 1.3 with 8 decimals
+        fallbackOracle.setLatestUpdateTimestamp(block.timestamp);
 
         // Deploy oracle
-        oracle = new sSuperUSDMorphoOracle(
+        oracle = new AggregatorProxy(
             address(collateralToken), address(loanToken), address(primaryOracle), address(fallbackOracle)
         );
 
@@ -177,14 +230,34 @@ contract sSuperUSDMorphoOracleTest is Test {
         assertEq(oracle.loanDecimals(), 6);
         assertEq(oracle.latestEMA(), 1e8);
         assertEq(oracle.latestAnswer(), 1e8);
-        assertEq(oracle.maxPriceAge(), 48 hours);
+        assertEq(oracle.latestPrimaryPrice(), 1e8);
+        assertEq(oracle.latestFallbackPrice(), 1.3e8);
+        assertEq(oracle.maxPriceAge(), 24 hours);
         assertEq(oracle.baseUpperBound(), 10500);
         assertEq(oracle.baseLowerBound(), 9500);
+        assertEq(oracle.latestEMATime(), 0);
+        assertEq(oracle.decimals(), 8);
+        assertEq(oracle.description(), "sSuperUSD / USDC");
+        assertEq(oracle.version(), 1);
+        (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound) =
+            oracle.getRoundData(0);
+        assertEq(roundId, uint80(0));
+        assertEq(answer, int256(1e8));
+        assertEq(startedAt, block.timestamp);
+        assertEq(updatedAt, block.timestamp);
+        assertEq(answeredInRound, uint80(0));
+
+        (roundId, answer, startedAt, updatedAt, answeredInRound) = oracle.latestRoundData();
+        assertEq(roundId, uint80(0));
+        assertEq(answer, int256(1e8));
+        assertEq(startedAt, block.timestamp);
+        assertEq(updatedAt, block.timestamp);
+        assertEq(answeredInRound, uint80(0));
     }
 
     function test_Constructor_RevertZeroAddress() public {
-        vm.expectRevert(sSuperUSDMorphoOracle.AddressZero.selector);
-        new sSuperUSDMorphoOracle(address(0), address(loanToken), address(primaryOracle), address(fallbackOracle));
+        vm.expectRevert(AggregatorProxy.AddressZero.selector);
+        new AggregatorProxy(address(0), address(loanToken), address(primaryOracle), address(fallbackOracle));
     }
 
     function test_InitialPrice() public {
@@ -202,12 +275,15 @@ contract sSuperUSDMorphoOracleTest is Test {
     }
 
     function test_UpdatePrice_ZeroPrice() public {
-        // Set primary oracle price to zero
-        primaryOracle.setRate(0);
+        // new accountant with zero rate
+        MockAccountant newAccountant = new MockAccountant();
+        newAccountant.setRate(0);
+
+        MockPrimaryOracle newPrimaryOracle = new MockPrimaryOracle(address(newAccountant), address(newAccountant), 0);
 
         // Try to update primary oracle - should revert
         vm.expectRevert("Zero price not allowed");
-        oracle.updatePrimaryOracle(address(primaryOracle));
+        oracle.updatePrimaryOracle(address(newPrimaryOracle));
     }
 
     function test_UpdateMultiplier() public {
@@ -220,26 +296,56 @@ contract sSuperUSDMorphoOracleTest is Test {
         assertEq(oracle.multiplier(), newMultiplier);
 
         // Test invalid multiplier
-        vm.expectRevert(sSuperUSDMorphoOracle.InvalidMultiplier.selector);
+        vm.expectRevert(AggregatorProxy.InvalidMultiplier.selector);
         oracle.updateMultiplier(0);
 
-        vm.expectRevert(sSuperUSDMorphoOracle.InvalidMultiplier.selector);
+        vm.expectRevert(AggregatorProxy.InvalidMultiplier.selector);
         oracle.updateMultiplier(10001);
+    }
+
+    function test_AccountantReverted() public {
+        // set accountant to paused
+        IAccountant.AccountantState memory state = accountant.accountantState();
+        state.isPaused = true;
+        accountant.setState(state);
+
+        // mock primary oracle should revert
+        vm.expectRevert();
+        primaryOracle.latestRoundData();
+
+        // oracle should handle the revert
+        vm.prank(executor);
+        oracle.updatePrice();
+
+        // verify that latestRoundData reverts when primary is reverted
+        vm.expectRevert("Primary oracle has reverted");
+        oracle.latestRoundData();
+
+        // getRoundData should still work even when primary is reverted
+        (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound) =
+            oracle.getRoundData(0);
+        assertEq(roundId, uint80(0));
+        assertEq(answer, oracle.latestAnswer());
+        assertEq(startedAt, oracle.latestUpdateTime());
+        assertEq(updatedAt, oracle.latestUpdateTime());
+        assertEq(answeredInRound, uint80(0));
     }
 
     function test_UpdatePrice_PrimaryOracleFreshAndInBounds() public {
         // first condition
         // no matter what fallback oracle price is
 
-        // set primary oracle price to 1.001e8
-        int256 newPrice = 1.001e8;
-        primaryOracle.setRate(newPrice);
+        // set accountant price to 1.001e6
+        uint96 newPrice = 1.001e6;
+        accountant.setRate(newPrice);
+
         // set accountant timestamp to 1 hour ago
         IAccountant.AccountantState memory state = accountant.accountantState();
         state.lastUpdateTimestamp = uint64(block.timestamp - 1 hours);
         accountant.setState(state);
 
-        int256 newPriceForEMA = newPrice;
+        (, int256 newPrimaryPrice,, uint256 newPrimaryUpdateTime,) = primaryOracle.latestRoundData();
+        int256 newPriceForEMA = newPrimaryPrice;
         int256 oldEMA = oracle.latestEMA();
         uint256 multiplierValue = oracle.multiplier();
         int256 expectedEMA =
@@ -250,7 +356,7 @@ contract sSuperUSDMorphoOracleTest is Test {
 
         // check event
         vm.expectEmit(true, true, false, true);
-        emit PrimaryPriceUsed(uint256(newPrice));
+        emit PrimaryPriceUsed(uint256(newPrimaryPrice));
         vm.expectEmit(true, true, false, true);
         emit MovingAverageUpdated(uint256(oldEMA), uint256(expectedEMA));
         vm.expectEmit(true, true, false, true);
@@ -262,21 +368,24 @@ contract sSuperUSDMorphoOracleTest is Test {
 
         // verify results
         // latestAnswer
-        assertEq(oracle.latestAnswer(), newPrice);
+        assertEq(oracle.latestAnswer(), newPrimaryPrice);
         // latestEMA
         assertEq(oracle.latestEMA(), expectedEMA);
         // EMAUpperBound
         assertEq(oracle.EMAUpperBound(), expectedEMAUpperBound);
         // EMALowerBound
         assertEq(oracle.EMALowerBound(), expectedEMALowerBound);
+        // latestUpdateTime
+        assertEq(oracle.latestUpdateTime(), newPrimaryUpdateTime);
     }
 
     function test_UpdatePrice_PrimaryOracleFreshAndOutOfBoundsAndFallbackInBounds() public {
         // second condition
 
-        // set primary oracle price to 1.1e8
-        int256 newPrice = 1.1e8;
-        primaryOracle.setRate(newPrice);
+        // set accountant price to 1.1e6
+        uint96 newPrice = 1.1e6;
+        accountant.setRate(newPrice);
+
         // set accountant timestamp to 1 hour ago
         IAccountant.AccountantState memory state = accountant.accountantState();
         state.lastUpdateTimestamp = uint64(block.timestamp - 1 hours);
@@ -285,7 +394,9 @@ contract sSuperUSDMorphoOracleTest is Test {
         int256 fallbackPrice = 1.001e8;
         fallbackOracle.setRate(fallbackPrice);
 
-        int256 newPriceForEMA = fallbackPrice; // fallback price is used
+        (, int256 newFallbackPrice,, uint256 newFallbackUpdateTime,) = fallbackOracle.latestRoundData();
+
+        int256 newPriceForEMA = newFallbackPrice; // fallback price is used
         int256 oldEMA = oracle.latestEMA();
         uint256 multiplierValue = oracle.multiplier();
         int256 expectedEMA =
@@ -315,14 +426,17 @@ contract sSuperUSDMorphoOracleTest is Test {
         assertEq(oracle.EMAUpperBound(), expectedEMAUpperBound);
         // EMALowerBound
         assertEq(oracle.EMALowerBound(), expectedEMALowerBound);
+        // latestUpdateTime
+        assertEq(oracle.latestUpdateTime(), newFallbackUpdateTime);
     }
 
     function test_UpdatePrice_PrimaryOracleFreshAndOutOfBoundsAndFallbackOutOfBounds() public {
         // 3-1 condition
 
-        // set primary oracle price to 1.1e8
-        int256 newPrice = 1.1e8;
-        primaryOracle.setRate(newPrice);
+        // set accountant price to 1.1e6
+        uint96 newPrice = 1.1e6;
+        accountant.setRate(newPrice);
+
         // set accountant timestamp to 1 hour ago
         IAccountant.AccountantState memory state = accountant.accountantState();
         state.lastUpdateTimestamp = uint64(block.timestamp - 1 hours);
@@ -332,7 +446,9 @@ contract sSuperUSDMorphoOracleTest is Test {
         fallbackOracle.setRate(fallbackPrice);
 
         int256 previousAnswer = oracle.latestAnswer();
-        int256 newPriceForEMA = newPrice; // primary price is used
+        uint256 previousUpdateTime = oracle.latestUpdateTime();
+        (, int256 newPrimaryPrice,,,) = primaryOracle.latestRoundData();
+        int256 newPriceForEMA = newPrimaryPrice; // primary price is used
         int256 oldEMA = oracle.latestEMA();
         uint256 multiplierValue = oracle.multiplier();
         int256 expectedEMA =
@@ -343,7 +459,7 @@ contract sSuperUSDMorphoOracleTest is Test {
 
         // check event
         vm.expectEmit(true, true, false, true);
-        emit NoPriceUpdate("primary_price_used_but_no_update", uint256(newPrice), uint256(fallbackPrice));
+        emit NoPriceUpdate("primary_price_used_but_no_update", uint256(newPrimaryPrice), uint256(fallbackPrice));
         vm.expectEmit(true, true, false, true);
         emit MovingAverageUpdated(uint256(oldEMA), uint256(expectedEMA));
         vm.expectEmit(true, true, false, true);
@@ -362,14 +478,17 @@ contract sSuperUSDMorphoOracleTest is Test {
         assertEq(oracle.EMAUpperBound(), expectedEMAUpperBound);
         // EMALowerBound
         assertEq(oracle.EMALowerBound(), expectedEMALowerBound);
+        // latestUpdateTime
+        assertEq(oracle.latestUpdateTime(), previousUpdateTime);
     }
 
     function test_UpdatePrice_PrimaryOracleStaleAndInBoundsAndFallbackInBounds() public {
         // second condition
 
-        // set primary oracle price to 1.001e8
-        int256 newPrice = 1.001e8;
-        primaryOracle.setRate(newPrice);
+        // set accountant price to 1.001e6
+        uint96 newPrice = 1.001e6;
+        accountant.setRate(newPrice);
+
         primaryOracle.setLatestUpdateTimestamp(block.timestamp - 5 days);
         // set accountant timestamp to 5 days ago
         IAccountant.AccountantState memory state = accountant.accountantState();
@@ -379,7 +498,8 @@ contract sSuperUSDMorphoOracleTest is Test {
         int256 fallbackPrice = 1.002e8;
         fallbackOracle.setRate(fallbackPrice);
 
-        int256 newPriceForEMA = fallbackPrice; // fallback price is used
+        (, int256 newFallbackPrice,, uint256 newFallbackUpdateTime,) = fallbackOracle.latestRoundData();
+        int256 newPriceForEMA = newFallbackPrice; // fallback price is used
         int256 oldEMA = oracle.latestEMA();
         uint256 multiplierValue = oracle.multiplier();
         int256 expectedEMA =
@@ -409,14 +529,17 @@ contract sSuperUSDMorphoOracleTest is Test {
         assertEq(oracle.EMAUpperBound(), expectedEMAUpperBound);
         // EMALowerBound
         assertEq(oracle.EMALowerBound(), expectedEMALowerBound);
+        // latestUpdateTime
+        assertEq(oracle.latestUpdateTime(), newFallbackUpdateTime);
     }
 
     function test_UpdatePrice_PrimaryOracleStaleAndInBoundsAndFallbackOutOfBounds() public {
         // 3-2 condition
 
-        // set primary oracle price to 1.001e8
-        int256 newPrice = 1.001e8;
-        primaryOracle.setRate(newPrice);
+        // set accountant price to 1.001e6
+        uint96 newPrice = 1.001e6;
+        accountant.setRate(newPrice);
+
         primaryOracle.setLatestUpdateTimestamp(block.timestamp - 5 days);
         // set accountant timestamp to 5 days ago
         IAccountant.AccountantState memory state = accountant.accountantState();
@@ -426,7 +549,10 @@ contract sSuperUSDMorphoOracleTest is Test {
         int256 fallbackPrice = 1.2e8;
         fallbackOracle.setRate(fallbackPrice);
 
+        (, int256 newPrimaryPrice,, uint256 newPrimaryUpdateTime,) = primaryOracle.latestRoundData();
+
         int256 previousAnswer = oracle.latestAnswer();
+        uint256 previousUpdateTime = oracle.latestUpdateTime();
         int256 newPriceForEMA = fallbackPrice; // fallback price is used
         int256 oldEMA = oracle.latestEMA();
         uint256 multiplierValue = oracle.multiplier();
@@ -438,7 +564,7 @@ contract sSuperUSDMorphoOracleTest is Test {
 
         // check event
         vm.expectEmit(true, true, false, true);
-        emit NoPriceUpdate("fallback_price_used_but_no_update", uint256(newPrice), uint256(fallbackPrice));
+        emit NoPriceUpdate("fallback_price_used_but_no_update", uint256(newPrimaryPrice), uint256(fallbackPrice));
         vm.expectEmit(true, true, false, true);
         emit MovingAverageUpdated(uint256(oldEMA), uint256(expectedEMA));
         vm.expectEmit(true, true, false, true);
@@ -457,14 +583,17 @@ contract sSuperUSDMorphoOracleTest is Test {
         assertEq(oracle.EMAUpperBound(), expectedEMAUpperBound);
         // EMALowerBound
         assertEq(oracle.EMALowerBound(), expectedEMALowerBound);
+        // latestUpdateTime
+        assertEq(oracle.latestUpdateTime(), previousUpdateTime);
     }
 
     function test_UpdatePrice_PrimaryOracleStaleAndOutOfBoundsAndFallbackInBounds() public {
         // second condition
 
-        // set primary oracle price to 1.1e8
-        int256 newPrice = 1.1e8;
-        primaryOracle.setRate(newPrice);
+        // set accountant price to 1.1e6
+        uint96 newPrice = 1.1e6;
+        accountant.setRate(newPrice);
+
         // set accountant timestamp to 5 days ago
         IAccountant.AccountantState memory state = accountant.accountantState();
         state.lastUpdateTimestamp = uint64(block.timestamp - 5 days);
@@ -473,7 +602,9 @@ contract sSuperUSDMorphoOracleTest is Test {
         int256 fallbackPrice = 1.002e8;
         fallbackOracle.setRate(fallbackPrice);
 
-        int256 newPriceForEMA = fallbackPrice; // fallback price is used
+        (, int256 newFallbackPrice,, uint256 newFallbackUpdateTime,) = fallbackOracle.latestRoundData();
+
+        int256 newPriceForEMA = newFallbackPrice; // fallback price is used
         int256 oldEMA = oracle.latestEMA();
         uint256 multiplierValue = oracle.multiplier();
         int256 expectedEMA =
@@ -503,14 +634,17 @@ contract sSuperUSDMorphoOracleTest is Test {
         assertEq(oracle.EMAUpperBound(), expectedEMAUpperBound);
         // EMALowerBound
         assertEq(oracle.EMALowerBound(), expectedEMALowerBound);
+        // latestUpdateTime
+        assertEq(oracle.latestUpdateTime(), newFallbackUpdateTime);
     }
 
     function test_UpdatePrice_PrimaryOracleStaleAndOutOfBoundsAndFallbackOutOfBounds() public {
         // 3-2 condition
 
-        // set primary oracle price to 1.1e8
-        int256 newPrice = 1.1e8;
-        primaryOracle.setRate(newPrice);
+        // set accountant price to 1.1e6
+        uint96 newPrice = 1.1e6;
+        accountant.setRate(newPrice);
+
         primaryOracle.setLatestUpdateTimestamp(block.timestamp - 5 days);
         // set accountant timestamp to 5 days ago
         IAccountant.AccountantState memory state = accountant.accountantState();
@@ -520,7 +654,10 @@ contract sSuperUSDMorphoOracleTest is Test {
         int256 fallbackPrice = 1.2e8;
         fallbackOracle.setRate(fallbackPrice);
 
+        (, int256 newPrimaryPrice,, uint256 newPrimaryUpdateTime,) = primaryOracle.latestRoundData();
+
         int256 previousAnswer = oracle.latestAnswer();
+        uint256 previousUpdateTime = oracle.latestUpdateTime();
         int256 newPriceForEMA = fallbackPrice; // fallback price is used
         int256 oldEMA = oracle.latestEMA();
         uint256 multiplierValue = oracle.multiplier();
@@ -532,7 +669,7 @@ contract sSuperUSDMorphoOracleTest is Test {
 
         // check event
         vm.expectEmit(true, true, false, true);
-        emit NoPriceUpdate("fallback_price_used_but_no_update", uint256(newPrice), uint256(fallbackPrice));
+        emit NoPriceUpdate("fallback_price_used_but_no_update", uint256(newPrimaryPrice), uint256(fallbackPrice));
         vm.expectEmit(true, true, false, true);
         emit MovingAverageUpdated(uint256(oldEMA), uint256(expectedEMA));
         vm.expectEmit(true, true, false, true);
@@ -551,18 +688,20 @@ contract sSuperUSDMorphoOracleTest is Test {
         assertEq(oracle.EMAUpperBound(), expectedEMAUpperBound);
         // EMALowerBound
         assertEq(oracle.EMALowerBound(), expectedEMALowerBound);
+        // latestUpdateTime
+        assertEq(oracle.latestUpdateTime(), previousUpdateTime);
     }
 
     function test_AdminFunctions() public {
         // Test updateMaxPriceAge
         uint256 newMaxAge = 72 hours;
         vm.expectEmit(true, true, false, true);
-        emit MaxPriceAgeUpdated(48 hours, newMaxAge);
+        emit MaxPriceAgeUpdated(24 hours, newMaxAge);
         oracle.updateMaxPriceAge(newMaxAge);
         assertEq(oracle.maxPriceAge(), newMaxAge);
 
         // Test updatePrimaryOracle
-        MockOracle newPrimaryOracle = new MockOracle(address(accountant), 1e8); // Create new mock oracle with initial rate
+        MockPrimaryOracle newPrimaryOracle = new MockPrimaryOracle(address(accountant), address(accountant), 1e8); // Create new mock oracle with initial rate
         vm.expectEmit(true, true, false, true);
         emit PrimaryOracleUpdated(address(primaryOracle), address(newPrimaryOracle));
         oracle.updatePrimaryOracle(address(newPrimaryOracle));
@@ -587,36 +726,30 @@ contract sSuperUSDMorphoOracleTest is Test {
         address nonOwner = makeAddr("nonOwner");
         vm.startPrank(nonOwner);
 
-        vm.expectRevert(sSuperUSDMorphoOracle.NotOwner.selector);
-        oracle.updateMaxPriceAge(48 hours);
+        vm.expectRevert(AggregatorProxy.NotOwner.selector);
+        oracle.updateMaxPriceAge(24 hours);
 
-        vm.expectRevert(sSuperUSDMorphoOracle.NotOwner.selector);
+        vm.expectRevert(AggregatorProxy.NotOwner.selector);
         oracle.updatePrimaryOracle(address(0x1));
 
-        vm.expectRevert(sSuperUSDMorphoOracle.NotOwner.selector);
+        vm.expectRevert(AggregatorProxy.NotOwner.selector);
         oracle.updateFallbackOracle(address(0x1));
 
-        vm.expectRevert(sSuperUSDMorphoOracle.NotOwner.selector);
+        vm.expectRevert(AggregatorProxy.NotOwner.selector);
         oracle.updateBaseBounds(10100, 9000); // Add test for updateBaseBounds
 
-        vm.expectRevert(sSuperUSDMorphoOracle.NotOwner.selector);
+        vm.expectRevert(AggregatorProxy.NotOwner.selector);
         oracle.transferOwnership(address(0x1));
 
         vm.stopPrank();
     }
 
-    function test_ViewFunctions() public {
-        // Test getPrecision
-        assertEq(oracle.getPrecision(), 36 + 6 - 18); // 36 + loanDecimals - collateralDecimals
-    }
-
-    // Test executor functionality
     function test_UpdateExecutor() public {
         address newExecutor = makeAddr("newExecutor");
 
         // Non-owner cannot add executor
         vm.prank(makeAddr("nonOwner"));
-        vm.expectRevert(sSuperUSDMorphoOracle.NotOwner.selector);
+        vm.expectRevert(AggregatorProxy.NotOwner.selector);
         oracle.updateExecutor(newExecutor, true);
 
         // Owner can add executor
@@ -629,7 +762,7 @@ contract sSuperUSDMorphoOracleTest is Test {
 
         // Non-executor cannot call updatePrice
         vm.prank(makeAddr("nonExecutor"));
-        vm.expectRevert(sSuperUSDMorphoOracle.NotExecutor.selector);
+        vm.expectRevert(AggregatorProxy.NotExecutor.selector);
         oracle.updatePrice();
 
         // Executor can call updatePrice
