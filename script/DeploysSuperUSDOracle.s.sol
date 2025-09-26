@@ -10,9 +10,10 @@ contract DeploySSuperUSDOracle is Script {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         vm.startBroadcast(deployerPrivateKey);
 
-        address accountantAddress = 0xFec60259f315287252c495C5921A30209Dd1FA4e;
+        address sSuperUSDAccountantAddress = 0xF4a5555C5716bb61DC9C9124257e92683f98415B;
+        address superUSDAccountantAddress = 0xFec60259f315287252c495C5921A30209Dd1FA4e;
 
-        sSuperUSDOracle oracle = new sSuperUSDOracle(accountantAddress);
+        sSuperUSDOracle oracle = new sSuperUSDOracle(superUSDAccountantAddress, sSuperUSDAccountantAddress);
 
         // Stop recording transactions
         vm.stopBroadcast();

@@ -7,14 +7,17 @@ import {IAccountant} from "./interfaces/IAccountant.sol";
 
 contract sSuperUSDOracle is IsSuperUSDOracle {
     address public owner;
+    address public immutable superUSDAccountant;
     address public immutable sSuperUSDAccountant;
+
 
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 
-    constructor(address _sSuperUSDAccountant) {
+    constructor(address _sSuperUSDAccountant, address _superUSDAccountant) {
         require(_sSuperUSDAccountant != address(0), "Accountant cannot be zero address");
         owner = msg.sender;
         sSuperUSDAccountant = _sSuperUSDAccountant;
+        superUSDAccountant = _superUSDAccountant;
     }
 
     modifier onlyOwner() {
@@ -35,11 +38,13 @@ contract sSuperUSDOracle is IsSuperUSDOracle {
         returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)
     {
         // revert if accountant is paused
-        uint256 rate = IAccountant(sSuperUSDAccountant).getRateSafe();
+        uint256 sSuperUSDRate = IAccountant(sSuperUSDAccountant).getRateSafe(); // 6 decimals
+        uint256 superUSDRate = IAccountant(superUSDAccountant).getRateSafe(); // 6 decimals
+
         uint256 timestamp = IAccountant(sSuperUSDAccountant).accountantState().lastUpdateTimestamp;
 
         // Convert from 6 decimals to 8 decimals
-        uint256 adjustedRate = rate * 100;
+        uint256 adjustedRate = sSuperUSDRate * superUSDRate / 1e4; // 6 + 6 - 8 decimals
 
         return (0, int256(adjustedRate), timestamp, timestamp, 0);
     }

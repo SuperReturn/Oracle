@@ -9,7 +9,8 @@ contract sSuperUSDOracleTest is Test {
     // Test contract state variables
     sSuperUSDOracle public oracle;
     address public owner;
-    address public accountant;
+    address public superUSDAccountant;
+    address public sSuperUSDAccountant;
 
     // Fork configuration
     uint256 public forkBlock = 379760000;
@@ -17,7 +18,6 @@ contract sSuperUSDOracleTest is Test {
 
     // Events to test
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
-    event RateUpdated(uint256 indexed roundId, uint256 rate, uint256 timestamp);
 
     function setUp() public {
         // Create and select fork
@@ -26,26 +26,28 @@ contract sSuperUSDOracleTest is Test {
 
         // Set up test addresses
         owner = address(this);
-        accountant = makeAddr("accountant"); // Create a mock accountant address
+        superUSDAccountant = makeAddr("superUSDAccountant");
+        sSuperUSDAccountant = makeAddr("sSuperUSDAccountant");
 
         // Deploy oracle
-        oracle = new sSuperUSDOracle(accountant);
+        oracle = new sSuperUSDOracle(superUSDAccountant, sSuperUSDAccountant);
 
         // Verify initial state
         assertEq(oracle.owner(), address(this));
-        assertEq(oracle.sSuperUSDAccountant(), accountant);
+        assertEq(oracle.superUSDAccountant(), superUSDAccountant);
+        assertEq(oracle.sSuperUSDAccountant(), sSuperUSDAccountant);
     }
 
     // Test constructor
-    function test_Constructor() public view {
+    function test_Constructor() public {
         assertEq(oracle.owner(), address(this));
-        assertEq(oracle.sSuperUSDAccountant(), accountant);
+        assertEq(oracle.superUSDAccountant(), superUSDAccountant);
+        assertEq(oracle.sSuperUSDAccountant(), sSuperUSDAccountant);
     }
 
-    // Test constructor with zero address
-    function test_Constructor_RevertZeroAddress() public {
+    function test_Constructor_RevertZeroAddress_sSuperUSDAccountant() public {
         vm.expectRevert("Accountant cannot be zero address");
-        new sSuperUSDOracle(address(0));
+        new sSuperUSDOracle(superUSDAccountant, address(0));
     }
 
     // Test ownership transfer
@@ -75,28 +77,76 @@ contract sSuperUSDOracleTest is Test {
 
     // Test latestRoundData
     function test_LatestRoundData() public {
-        // Create mock accountant contract that returns a rate
-        // MockAccountant mockAccountant = new MockAccountant();
-        address accountantAddress = 0xFec60259f315287252c495C5921A30209Dd1FA4e;
-        oracle = new sSuperUSDOracle(accountantAddress);
+        // Deploy mock accountants
+        MockAccountant mockSuperUSDAccountant = new MockAccountant(1_000_000); // 1.0 with 6 decimals
+        MockAccountant mockSSuperUSDAccountant = new MockAccountant(1_100_000); // 1.1 with 6 decimals
+
+        // Deploy oracle with mock accountants
+        oracle = new sSuperUSDOracle(
+            address(mockSuperUSDAccountant),
+            address(mockSSuperUSDAccountant)
+        );
 
         // Get latest round data
         (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound) =
             oracle.latestRoundData();
 
+        // Calculate expected rate: (1.0 * 1.1) with proper decimal adjustment
+        // 1_000_000 * 1_100_000 / 1e4 = 110_000_000 (1.1 with 8 decimals)
+        uint256 expectedRate = (1_000_000 * 1_100_000) / 1e4;
+
         // Verify the returned values
         assertEq(roundId, 0);
-        // assertEq(answer, 1_000_000_00); // 1.0 with 8 decimals (converted from 6)
-        assertEq(answer, int256(IAccountant(accountantAddress).getRate() * 100));
-        assertEq(startedAt, IAccountant(accountantAddress).accountantState().lastUpdateTimestamp);
-        assertEq(updatedAt, IAccountant(accountantAddress).accountantState().lastUpdateTimestamp);
+        assertEq(answer, int256(expectedRate));
+        assertEq(startedAt, mockSSuperUSDAccountant.accountantState().lastUpdateTimestamp);
+        assertEq(updatedAt, mockSSuperUSDAccountant.accountantState().lastUpdateTimestamp);
         assertEq(answeredInRound, 0);
     }
 }
 
-// Mock Accountant contract for testing
+// Enhanced Mock Accountant contract for testing
 contract MockAccountant {
-    function getRate() external pure returns (uint256) {
-        return 1_000_000; // Return 1.0 with 6 decimals
+    uint256 private rate;
+    uint64 private constant MOCK_TIMESTAMP = 1695744000; // Changed to uint64 for proper type matching
+
+    constructor(uint256 _rate) {
+        rate = _rate;
     }
+
+    function getRateSafe() external view returns (uint256) {
+        return rate;
+    }
+
+    function accountantState() external pure returns (AccountantState memory) {
+        return AccountantState(
+            address(0),           // payoutAddress
+            0,                    // highwaterMark
+            0,                    // feesOwedInBase
+            0,                    // totalSharesLastUpdate
+            0,                    // exchangeRate
+            0,                    // allowedExchangeRateChangeUpper
+            0,                    // allowedExchangeRateChangeLower
+            MOCK_TIMESTAMP,       // lastUpdateTimestamp
+            false,               // isPaused
+            0,                    // minimumUpdateDelayInSeconds
+            0,                    // platformFee
+            0                     // performanceFee
+        );
+    }
+}
+
+// Updated AccountantState struct to match IAccountant interface
+struct AccountantState {
+    address payoutAddress;
+    uint96 highwaterMark;
+    uint128 feesOwedInBase;
+    uint128 totalSharesLastUpdate;
+    uint96 exchangeRate;
+    uint16 allowedExchangeRateChangeUpper;
+    uint16 allowedExchangeRateChangeLower;
+    uint64 lastUpdateTimestamp;
+    bool isPaused;
+    uint24 minimumUpdateDelayInSeconds;
+    uint16 platformFee;
+    uint16 performanceFee;
 }
