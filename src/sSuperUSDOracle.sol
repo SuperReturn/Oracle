@@ -41,7 +41,10 @@ contract sSuperUSDOracle is IsSuperUSDOracle {
         uint256 superUSDRate = IAccountant(superUSDAccountant).getRateSafe(); // 6 decimals
         uint256 sSuperUSDRate = IAccountant(sSuperUSDAccountant).getRateSafe(); // 6 decimals
 
-        uint256 timestamp = IAccountant(sSuperUSDAccountant).accountantState().lastUpdateTimestamp;
+        uint256 superUSDTimestamp = IAccountant(superUSDAccountant).accountantState().lastUpdateTimestamp;
+        uint256 sSuperUSDTimestamp = IAccountant(sSuperUSDAccountant).accountantState().lastUpdateTimestamp;
+
+        uint256 timestamp = superUSDTimestamp > sSuperUSDTimestamp ? sSuperUSDTimestamp : superUSDTimestamp;
 
         // Convert from 6 decimals to 8 decimals
         uint256 adjustedRate = sSuperUSDRate * superUSDRate / 1e4; // 6 + 6 - 8 decimals
