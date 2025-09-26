@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.21;
 
-import {IMorphoOracle} from "./interfaces/IMorphoOracle.sol";
+import {AggregatorV3Interface} from "./interfaces/AggregatorV3Interface.sol";
 import {IsSuperUSDOracle} from "./interfaces/IsSuperUSDOracle.sol";
-import {IAccountant} from "./interfaces/IAccountant.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {FixedPointMathLib} from "@solmate/utils/FixedPointMathLib.sol";
 
-/// @title sSuperUSDOracle
+/// @title AggregatorProxy
 /// @author SuperReturn
-/// @notice Oracle contract for sSuperUSD that implements IMorphoOracle interface
+/// @notice Oracle contract for sSuperUSD
 /// @dev This oracle gets the exchange rate from an external sSuperUSD oracle and converts it to Morpho format
-contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
+contract AggregatorProxy is AggregatorV3Interface, ReentrancyGuard {
     using FixedPointMathLib for uint256;
 
     /**
@@ -88,6 +87,12 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
 
     /// @notice The timestamp of the last fallback oracle update
     uint256 public latestFallbackTime;
+
+    /// @notice The timestamp of the latestAnswer update
+    uint256 public latestUpdateTime;
+
+    /// @notice Whether the primary oracle has reverted
+    bool public isPrimaryReverted;
 
     /**
      *
@@ -176,6 +181,8 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
             IsSuperUSDOracle(_sSuperUSDOracleAddress).latestRoundData();
         latestEMA = latestPrimaryPrice;
         latestAnswer = latestPrimaryPrice;
+        latestUpdateTime = latestPrimaryTime;
+        isPrimaryReverted = false;
 
         latestEMATime = 0;
 
@@ -211,10 +218,13 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
             uint256 timestamp,
             uint80 /* answeredInRound */
         ) {
+            isPrimaryReverted = false;
             latestPrimaryPrice = price;
             latestPrimaryTime = timestamp;
         } catch {
+            isPrimaryReverted = true;
             emit PrimaryOracleReverted();
+            return;
         }
 
         // fallback oracle check
@@ -251,11 +261,13 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
 
         if (isPrimaryFresh && !isPrimaryPriceOutOfRange) {
             latestAnswer = latestPrimaryPrice;
+            latestUpdateTime = latestPrimaryTime;
             newPriceForEMA = latestAnswer;
             newEMATime = latestPrimaryTime;
             emit PrimaryPriceUsed(uint256(latestAnswer));
         } else if (isFallbackFresh && !isFallbackPriceOutOfRange) {
             latestAnswer = latestFallbackPrice;
+            latestUpdateTime = latestFallbackTime;
             newPriceForEMA = latestAnswer;
             newEMATime = latestFallbackTime;
             emit FallbackPriceUsed(uint256(latestAnswer), "price_out_of_bounds");
@@ -300,12 +312,59 @@ contract sSuperUSDMorphoOracle is IMorphoOracle, ReentrancyGuard {
         }
     }
 
-    /// @notice Returns the latest price without updating it
-    /// @dev Calculates the price by scaling the stored answer to the correct precision
-    /// @return The exchange rate of 1 unit of collateral token in terms of 1 unit of loan token (scaled by 1e36)
-    function price() external view override returns (uint256) {
-        uint256 targetPrecision = 36 + loanDecimals - collateralDecimals;
-        return uint256(latestAnswer) * (10 ** (targetPrecision - 8));
+    /// @notice Implementation of AggregatorV3Interface functions
+    /// @dev These functions provide Chainlink-compatible price feed interface
+
+    /// @notice Get the number of decimals for the output price
+    function decimals() external pure returns (uint8) {
+        return 8;
+    }
+
+    /// @notice Get a description of this price feed
+    function description() external pure returns (string memory) {
+        return "sSuperUSD / USDC";
+    }
+
+    /// @notice Get the version number of this oracle
+    function version() external pure returns (uint256) {
+        return 1;
+    }
+
+    /// @notice Get data from a specific round
+    /// @param _roundId The round ID to get data for
+    function getRoundData(uint80 _roundId) external view returns (
+        uint80 roundId,
+        int256 answer,
+        uint256 startedAt,
+        uint256 updatedAt,
+        uint80 answeredInRound
+    ) {
+        // Since we don't maintain historical rounds, return latest data
+        return (
+            0,
+            latestAnswer,
+            latestUpdateTime,
+            latestUpdateTime,
+            0
+        );
+    }
+
+    /// @notice Get the latest round data
+    function latestRoundData() external view returns (
+        uint80 roundId,
+        int256 answer,
+        uint256 startedAt,
+        uint256 updatedAt,
+        uint80 answeredInRound
+    ) {
+        require(!isPrimaryReverted, "Primary oracle has reverted");
+        return (
+            0,
+            latestAnswer,
+            latestUpdateTime,
+            latestUpdateTime,
+            0
+        );
     }
 
     /**
