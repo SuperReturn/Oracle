@@ -4,17 +4,16 @@ pragma solidity ^0.8.21;
 import {IsSuperUSDOracle} from "./interfaces/IsSuperUSDOracle.sol";
 import {IAccountant} from "./interfaces/IAccountant.sol";
 
-
 contract sSuperUSDOracle is IsSuperUSDOracle {
     address public owner;
     address public immutable superUSDAccountant;
     address public immutable sSuperUSDAccountant;
 
-
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 
     constructor(address _superUSDAccountant, address _sSuperUSDAccountant) {
         require(_sSuperUSDAccountant != address(0), "Accountant cannot be zero address");
+        require(_superUSDAccountant != address(0), "Accountant cannot be zero address");
         owner = msg.sender;
         superUSDAccountant = _superUSDAccountant;
         sSuperUSDAccountant = _sSuperUSDAccountant;
