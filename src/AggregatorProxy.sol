@@ -21,7 +21,7 @@ contract AggregatorProxy is AggregatorV3Interface, ReentrancyGuard {
      */
 
     /// @notice Maximum age of price feed in seconds before considering it stale
-    uint256 public maxPriceAge = 48 hours;
+    uint256 public maxPriceAge = 24 hours;
 
     /// @notice The collateral token address
     address public immutable collateralToken;
@@ -468,17 +468,5 @@ contract AggregatorProxy is AggregatorV3Interface, ReentrancyGuard {
         uint256 oldDelay = minEMADelay;
         minEMADelay = _newDelay;
         emit MinEMADelayUpdated(oldDelay, _newDelay);
-    }
-
-    /**
-     *
-     * VIEW FUNCTIONS
-     *
-     */
-
-    /// @notice Get the precision used by this oracle
-    /// @return The number of decimals in the price returned by this oracle
-    function getPrecision() external view returns (uint256) {
-        return 36 + loanDecimals - collateralDecimals;
     }
 }
