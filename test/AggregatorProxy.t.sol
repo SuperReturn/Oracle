@@ -188,6 +188,7 @@ contract AggregatorProxyTest is Test {
     event MovingAverageUpdated(uint256 oldMA, uint256 newMA);
     event MultiplierUpdated(uint256 oldMultiplier, uint256 newMultiplier);
     event PrimaryPriceUsed(uint256 price);
+    event PrimaryOracleReverted();
     event FallbackPriceUsed(uint256 price, string reason);
     event NoPriceUpdate(string reason, uint256 primaryPrice, uint256 fallbackPrice);
 
@@ -313,17 +314,24 @@ contract AggregatorProxyTest is Test {
         vm.expectRevert();
         primaryOracle.latestRoundData();
 
+        vm.expectEmit(true, true, false, true);
+        emit PrimaryOracleReverted();
+
         // oracle should handle the revert
         vm.prank(executor);
         oracle.updatePrice();
 
         // verify that latestRoundData reverts when primary is reverted
-        vm.expectRevert("Primary oracle has reverted");
-        oracle.latestRoundData();
+        (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound) =
+            oracle.latestRoundData();
+        assertEq(roundId, uint80(0));
+        assertEq(answer, oracle.latestAnswer());
+        assertEq(startedAt, oracle.latestUpdateTime());
+        assertEq(updatedAt, oracle.latestUpdateTime());
+        assertEq(answeredInRound, uint80(0));
 
         // getRoundData should still work even when primary is reverted
-        (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound) =
-            oracle.getRoundData(0);
+        (roundId, answer, startedAt, updatedAt, answeredInRound) = oracle.getRoundData(0);
         assertEq(roundId, uint80(0));
         assertEq(answer, oracle.latestAnswer());
         assertEq(startedAt, oracle.latestUpdateTime());

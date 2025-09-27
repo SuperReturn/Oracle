@@ -202,6 +202,7 @@ contract AggregatorProxy is AggregatorV3Interface, ReentrancyGuard {
         bool isFallbackFresh = false;
         bool isPrimaryPriceOutOfRange = false;
         bool isFallbackPriceOutOfRange = false;
+        bool isPrimaryRevert = false;
         int256 newPriceForEMA;
         int256 oldEMA = latestEMA;
         uint256 newEMATime;
@@ -217,8 +218,8 @@ contract AggregatorProxy is AggregatorV3Interface, ReentrancyGuard {
             latestPrimaryPrice = price;
             latestPrimaryTime = timestamp;
         } catch {
+            isPrimaryRevert = true;
             emit PrimaryOracleReverted();
-            return;
         }
 
         // fallback oracle check
@@ -236,7 +237,7 @@ contract AggregatorProxy is AggregatorV3Interface, ReentrancyGuard {
         }
 
         // Fresh check
-        if (block.timestamp - latestPrimaryTime <= maxPriceAge) {
+        if (block.timestamp - latestPrimaryTime <= maxPriceAge && !isPrimaryRevert) {
             isPrimaryFresh = true;
         }
 
@@ -341,11 +342,7 @@ contract AggregatorProxy is AggregatorV3Interface, ReentrancyGuard {
         view
         returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)
     {
-        try IsSuperUSDOracle(sSuperUSDOracleAddress).latestRoundData() {
-            return (0, latestAnswer, latestUpdateTime, latestUpdateTime, 0);
-        } catch {
-            revert("Primary oracle has reverted");
-        }
+        return (0, latestAnswer, latestUpdateTime, latestUpdateTime, 0);
     }
 
     /**
