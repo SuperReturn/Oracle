@@ -265,7 +265,7 @@ contract AggregatorProxy is AggregatorV3Interface, ReentrancyGuard {
             latestUpdateTime = latestFallbackTime;
             newPriceForEMA = latestAnswer;
             newEMATime = latestFallbackTime;
-            emit FallbackPriceUsed(uint256(latestAnswer), "price_out_of_bounds");
+            emit FallbackPriceUsed(uint256(latestAnswer), "primary_price_invalid_using_fallback");
         } else {
             string memory reason;
             if (isPrimaryFresh) {

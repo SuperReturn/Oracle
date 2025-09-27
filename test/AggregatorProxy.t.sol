@@ -415,7 +415,7 @@ contract AggregatorProxyTest is Test {
 
         // check event
         vm.expectEmit(true, true, false, true);
-        emit FallbackPriceUsed(uint256(fallbackPrice), "price_out_of_bounds");
+        emit FallbackPriceUsed(uint256(fallbackPrice), "primary_price_invalid_using_fallback");
         vm.expectEmit(true, true, false, true);
         emit MovingAverageUpdated(uint256(oldEMA), uint256(expectedEMA));
         vm.expectEmit(true, true, false, true);
@@ -518,7 +518,7 @@ contract AggregatorProxyTest is Test {
 
         // check event
         vm.expectEmit(true, true, false, true);
-        emit FallbackPriceUsed(uint256(fallbackPrice), "price_out_of_bounds");
+        emit FallbackPriceUsed(uint256(fallbackPrice), "primary_price_invalid_using_fallback");
         vm.expectEmit(true, true, false, true);
         emit MovingAverageUpdated(uint256(oldEMA), uint256(expectedEMA));
         vm.expectEmit(true, true, false, true);
@@ -623,7 +623,7 @@ contract AggregatorProxyTest is Test {
 
         // check event
         vm.expectEmit(true, true, false, true);
-        emit FallbackPriceUsed(uint256(fallbackPrice), "price_out_of_bounds");
+        emit FallbackPriceUsed(uint256(fallbackPrice), "primary_price_invalid_using_fallback");
         vm.expectEmit(true, true, false, true);
         emit MovingAverageUpdated(uint256(oldEMA), uint256(expectedEMA));
         vm.expectEmit(true, true, false, true);
